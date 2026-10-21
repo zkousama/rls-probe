@@ -1,0 +1,22 @@
+{
+  "name": "rls-probe",
+  "version": "0.1.0",
+  "type": "module",
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.11"
+  },
+  "description": "Finds what a visitor, or another signed-in user, can read and change in a Supabase app, by running its migrations offline",
+  "bin": {
+    "rls-probe": "src/cli.js"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}

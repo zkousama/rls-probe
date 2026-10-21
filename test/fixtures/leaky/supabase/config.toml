@@ -1,0 +1,4 @@
+project_id = "leaky"
+
+[functions.admin-export]
+verify_jwt = false
