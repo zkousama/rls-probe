@@ -14,7 +14,7 @@ export async function readSchema(db) {
     select a.attrelid as oid, a.attname as name, format_type(a.atttypid, a.atttypmod) as type,
       t.typtype, t.typcategory, a.attnotnull as notnull, a.atthasdef as hasdefault,
       a.attidentity as identity, a.attgenerated as generated, a.attnum as num,
-      case when t.typtype = 'e' then (select array_agg(enumlabel order by enumsortorder) from pg_enum where enumtypid = t.oid) end as labels
+      case when t.typtype = 'e' then (select array_agg(enumlabel::text order by enumsortorder) from pg_enum where enumtypid = t.oid) end as labels
     from pg_attribute a join pg_type t on t.oid = a.atttypid
     join pg_class c on c.oid = a.attrelid join pg_namespace n on n.oid = c.relnamespace
     where n.nspname = 'public' and a.attnum > 0 and not a.attisdropped
@@ -92,7 +92,7 @@ export async function readFunctions(db) {
 
 export async function readPolicies(db) {
   return (await db.query(`
-    select tablename as table, policyname as name, cmd, roles, qual, with_check as check
+    select tablename as table, policyname as name, cmd, roles::text[] as roles, qual, with_check as check
     from pg_policies where schemaname = 'public' order by tablename, policyname`)).rows;
 }
 

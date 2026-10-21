@@ -106,6 +106,12 @@ refuses before the suggested grants, and after them each user can create, read
 and edit their own rows while a visitor and a second user reach nothing they
 shouldn't. 30 of 30 checks pass on `test/fixtures/new-grants`.
 
+`scripts/verify-oct30-on-supabase.mjs` does it for any app: it applies only the
+grants marked safe, checks through the API that those tables answer and the
+others still refuse, then runs the probe against the real database to show the
+grants let nobody reach anything the rules didn't already allow. On a 15-table
+open-source app built with Lovable, 57 of 57 checks passed.
+
 The in-memory database has the parts of Supabase that access rules depend on:
 the `anon`, `authenticated` and `service_role` roles, their default grants,
 `auth.uid()`, `auth.jwt()`, `auth.users` and the storage tables. Statements that

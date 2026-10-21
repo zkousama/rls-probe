@@ -11,7 +11,7 @@ export async function grantsReport(explicitDb, findings) {
     select c.relname as name, c.relrowsecurity as rls
     from pg_class c join pg_namespace n on n.oid = c.relnamespace
     where n.nspname = 'public' and c.relkind in ('r', 'p') order by c.relname`)).rows;
-  const policies = (await explicitDb.query(`select tablename as table, cmd, roles, qual, with_check as check from pg_policies where schemaname = 'public'`)).rows;
+  const policies = (await explicitDb.query(`select tablename as table, cmd, roles::text[] as roles, qual, with_check as check from pg_policies where schemaname = 'public'`)).rows;
 
   const out = { breaks: [], unsafe: [], closedNoRls: [], fine: [], noPolicies: [] };
   for (const t of tables) {
