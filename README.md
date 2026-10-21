@@ -77,6 +77,10 @@ that don't run in memory, like `vector`) are skipped and listed in the report.
 - Tables whose primary key is also the user's id, like `profiles`, can't be
   tested for "create a row for someone else": that row already exists.
 - It reads storage bucket settings, not storage policies.
+- It gives `anon` and `authenticated` access to every table in `public`, as Supabase projects have done by
+  default. Projects created since May 30, 2026 no longer get those grants for new tables, and Supabase is
+  extending that to existing projects; on those, a table with no grant is closed even without row-level
+  security, so the report can show more than the API would let through.
 - A finding is a place to look. Some tables are meant to be public; the report
   says so where it can't tell.
 
