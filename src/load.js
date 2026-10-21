@@ -12,6 +12,7 @@ import { uuid_ossp } from "@electric-sql/pglite/contrib/uuid_ossp";
 import { splitStatements } from "./split.js";
 
 const SHIM = fs.readFileSync(new URL("./shim.sql", import.meta.url), "utf8");
+const LEGACY_GRANTS = fs.readFileSync(new URL("./legacy-grants.sql", import.meta.url), "utf8");
 const AVAILABLE = new Set(["citext", "hstore", "ltree", "moddatetime", "pg_trgm", "pgcrypto", "unaccent", "uuid-ossp", "plpgsql"]);
 
 // Statements that only matter to a hosted Supabase project. They are skipped on
@@ -42,9 +43,12 @@ export function findMigrations(target) {
   return [];
 }
 
-export async function loadDatabase(files) {
+// grants: "legacy" gives anon and authenticated every table, as Supabase did by
+// default; "explicit" gives them only what the migrations grant themselves.
+export async function loadDatabase(files, { grants = "legacy" } = {}) {
   const db = new PGlite({ extensions: { citext, hstore, ltree, moddatetime, pg_trgm, pgcrypto, unaccent, uuid_ossp } });
   await db.exec(SHIM);
+  if (grants === "legacy") await db.exec(LEGACY_GRANTS);
   const skipped = [];
   const failed = [];
   let applied = 0;

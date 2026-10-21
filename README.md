@@ -57,11 +57,54 @@ and still let one user edit another's rows. So this doesn't read them. It tries.
   build, `VITE_`/`NEXT_PUBLIC_` variables holding secrets, and edge functions with
   `verify_jwt = false` that don't check who's calling.
 
+## Supabase's 2026 grants change
+
+Supabase used to grant `anon` and `authenticated` every table in `public`, and
+left row-level security to decide which rows. Projects created since May 30,
+2026 no longer get those grants for new tables, and from October 30, 2026 the
+same goes for new tables in every project. Tables that already exist keep
+their grants. A table without one answers `permission denied` (42501).
+
+The tempting fix for that error is a grant on every table. On a table with
+row-level security off, or with a policy that's too loose, that grant is
+what exposes the data.
+
+```sh
+npx github:zkousama/rls-probe path/to/your-app --oct30
+```
+
+adds a section that rebuilds the database without the old grants and sorts
+the tables:
+
+```
+Safe to grant: row-level security already limits these to the right rows.
+  grant select on public.categories to anon, authenticated;
+  grant select, insert, update, delete on public.notes to authenticated;
+
+Fix before granting: a grant would open these up.
+  messages: Users can change each other's data
+  profiles: Visitors can read users' data
+
+Closed only because nothing grants them: row-level security is off, so the quick
+fix for 42501, a grant on every table, would expose every row.
+  orders: enable row level security and add policies before granting anything.
+```
+
+The grants it suggests are the ones each table's policies need, including
+`usage` on the sequence behind a `serial` id when users insert rows.
+`--grants=explicit` runs the whole probe as a project without the old grants.
+
 ## Does it match a real Supabase?
 
 `scripts/compare-with-supabase.mjs` starts from a real local Supabase running the
 same migrations, signs up two real users, repeats every check over the REST API
 and compares. On the test app in `test/fixtures/leaky` all 38 checks agree.
+
+`scripts/compare-grants-with-supabase.mjs` does the same for the grants change,
+on a local Supabase opted in with the SQL from Supabase's changelog: every table
+refuses before the suggested grants, and after them each user can create, read
+and edit their own rows while a visitor and a second user reach nothing they
+shouldn't. 30 of 30 checks pass on `test/fixtures/new-grants`.
 
 The in-memory database has the parts of Supabase that access rules depend on:
 the `anon`, `authenticated` and `service_role` roles, their default grants,
@@ -77,10 +120,9 @@ that don't run in memory, like `vector`) are skipped and listed in the report.
 - Tables whose primary key is also the user's id, like `profiles`, can't be
   tested for "create a row for someone else": that row already exists.
 - It reads storage bucket settings, not storage policies.
-- It gives `anon` and `authenticated` access to every table in `public`, as Supabase projects have done by
-  default. Projects created since May 30, 2026 no longer get those grants for new tables, and Supabase is
-  extending that to existing projects; on those, a table with no grant is closed even without row-level
-  security, so the report can show more than the API would let through.
+- By default it gives `anon` and `authenticated` every table in `public`, as Supabase projects have
+  done. For a project created since May 30, 2026, use `--grants=explicit`, or the report can show more
+  than the API would let through.
 - A finding is a place to look. Some tables are meant to be public; the report
   says so where it can't tell.
 

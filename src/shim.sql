@@ -1,7 +1,5 @@
 -- The parts of a Supabase database that migrations and access rules lean on,
--- recreated so the migrations run in an in-memory Postgres. Grants match what
--- Supabase sets up: anon and authenticated can use every table in public until
--- row-level security says otherwise.
+-- recreated so the migrations run in an in-memory Postgres.
 
 create role anon nologin noinherit;
 create role authenticated nologin noinherit;
@@ -25,10 +23,11 @@ create schema if not exists cron;
 create schema if not exists vault;
 
 grant usage on schema public, extensions, auth, storage, graphql_public to anon, authenticated, service_role;
-alter default privileges in schema public grant all on tables to anon, authenticated, service_role;
+alter default privileges in schema public grant all on tables to service_role;
 alter default privileges in schema public grant all on functions to anon, authenticated, service_role;
-alter default privileges in schema public grant all on sequences to anon, authenticated, service_role;
-grant all on all tables in schema public to anon, authenticated, service_role;
+alter default privileges in schema public grant all on sequences to service_role;
+-- Table and sequence grants for anon and authenticated are in legacy-grants.sql:
+-- Supabase's old default, which new tables stop getting with the 2026 grants change.
 
 create table auth.users (
   instance_id uuid,
