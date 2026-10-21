@@ -74,6 +74,15 @@ for (const t of safe) {
   }
   check(`real probe: ${t} allows nothing the rules didn't already allow`, extra.length === 0, extra.join(", "));
 }
+// The app keeps working: everything user A could do to their own rows with the old
+// default grants, they can still do with only the suggested ones.
+for (const t of safe) {
+  const r = real.find((x) => x.table === t);
+  const before = legacy[t]?.A;
+  if (!r?.A || !before) continue;
+  const lost = ["read", ...fields].filter((f) => (f === "read" ? before.read > 0 && !(r.A.read > 0) : before[f] && !r.A[f]));
+  check(`real: user A can still do everything the rules allow on their own ${t} rows`, lost.length === 0, `refused: ${lost.join(", ")}`);
+}
 const serious = findingsFrom(real.filter((r) => safe.includes(r.table)), [], [], []).filter((f) => f.severity !== "review");
 check("real probe: no critical, high or medium finding on the granted tables", serious.length === 0, serious.map((f) => `${f.where}: ${f.title}`).join("; "));
 

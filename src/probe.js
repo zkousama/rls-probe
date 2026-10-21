@@ -3,6 +3,8 @@ import { USERS, ownerOf, ownerPath, q, rowFor } from "./seed.js";
 
 const AS = {
   anon: { role: "anon", claims: { role: "anon" } },
+  // A on their own rows: what the app needs to keep working, not a finding.
+  A: { role: "authenticated", claims: { sub: USERS.A.id, role: "authenticated", aud: "authenticated", email: USERS.A.email } },
   B: { role: "authenticated", claims: { sub: USERS.B.id, role: "authenticated", aud: "authenticated", email: USERS.B.email } },
 };
 
@@ -48,7 +50,7 @@ export async function probeTables(db, tables, known) {
     const setColumn = table.columns.find((c) => !table.pk.includes(c.name) && c.generated !== "s" && c.identity !== "a")?.name
       ?? table.columns.find((c) => c.generated !== "s" && c.identity !== "a")?.name;
 
-    for (const who of ["anon", "B"]) {
+    for (const who of ["anon", "B", "A"]) {
       let read = await as(db, who, `select ctid::text as c from ${q(table.name)}`);
       let readA = read.rows.filter((r) => aRows.has(r.c)).length;
       if (!read.ok && table.pk.length) {

@@ -64,12 +64,17 @@ export function ownerPath(table, tables, seen = new Set()) {
 }
 
 export function ownerOf(table, row, known) {
+  // A row's own user column decides first; a link to another row (a notification
+  // about someone's friendship) only counts when the row has no user of its own.
+  for (const fk of table.fks) {
+    const value = row[fk.column];
+    if (value == null || fk.refSchema !== "auth" || fk.refTable !== "users") continue;
+    for (const [key, user] of Object.entries(USERS)) if (value === user.id) return key;
+  }
   for (const fk of table.fks) {
     const value = row[fk.column];
     if (value == null) continue;
-    if (fk.refSchema === "auth" && fk.refTable === "users") {
-      for (const [key, user] of Object.entries(USERS)) if (value === user.id) return key;
-    } else if (fk.refSchema === "public" && fk.refTable !== table.name) {
+    if (fk.refSchema === "public" && fk.refTable !== table.name) {
       const parent = known.get(fk.refTable)?.find((r) => String(r.row[fk.refColumn]) === String(value));
       if (parent && parent.owner !== "shared") return parent.owner;
     }
