@@ -1,0 +1,35 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-audit --no-fund
+      - run: npm test
+
+  # The action itself, on the two test apps: the fixed one passes, the leaky one must fail.
+  action:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./
+        with:
+          path: test/fixtures/fixed
+          args: ""
+      - id: leaky
+        uses: ./
+        continue-on-error: true
+        with:
+          path: test/fixtures/leaky
+      - name: The leaky app failed the check
+        if: steps.leaky.outcome != 'failure'
+        run: exit 1

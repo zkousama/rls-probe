@@ -1,12 +1,14 @@
 # rls-probe
 
+[![ci](https://github.com/zkousama/rls-probe/actions/workflows/ci.yml/badge.svg)](https://github.com/zkousama/rls-probe/actions/workflows/ci.yml)
+
 Finds what a visitor, or another signed-in user, can read and change in a
 Supabase app. It runs the app's migrations in an in-memory Postgres, signs in
 two users who each own some rows, and tries every table as a visitor and as the
 other user. Nothing touches a live database.
 
 ```sh
-npx github:zkousama/rls-probe path/to/your-app
+npx rls-probe path/to/your-app
 ```
 
 It reads `supabase/migrations/*.sql` (or `migrations/`, or a folder of `.sql`
@@ -70,7 +72,7 @@ row-level security off, or with a policy that's too loose, that grant is
 what exposes the data.
 
 ```sh
-npx github:zkousama/rls-probe path/to/your-app --oct30
+npx rls-probe path/to/your-app --oct30
 ```
 
 adds a section that rebuilds the database without the old grants and sorts
@@ -92,7 +94,21 @@ fix for 42501, a grant on every table, would expose every row.
 
 The grants it suggests are the ones each table's policies need, including
 `usage` on the sequence behind a `serial` id when users insert rows.
+`--fix` writes them as a new migration next to the others, with the tables it
+held back listed as comments, so the change is a file to read and commit.
 `--grants=explicit` runs the whole probe as a project without the old grants.
+
+## In CI
+
+```yaml
+- uses: zkousama/rls-probe@v0
+  with:
+    path: .            # the folder holding supabase/migrations
+    args: --oct30      # the default
+```
+
+The report goes in the job summary, and the step fails when a table leaks or
+needs a grant, so a migration that opens data never merges unnoticed.
 
 ## Does it match a real Supabase?
 

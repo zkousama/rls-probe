@@ -1,16 +1,40 @@
 {
   "name": "rls-probe",
-  "version": "0.1.0",
-  "type": "module",
-  "dependencies": {
-    "@electric-sql/pglite": "^0.5.11"
+  "version": "0.2.0",
+  "description": "Finds what a visitor, or another signed-in user, can read and change in a Supabase app, and which grants are safe after Supabase's 2026 grants change, by running its migrations offline",
+  "keywords": [
+    "supabase",
+    "row-level-security",
+    "rls",
+    "postgres",
+    "postgresql",
+    "security",
+    "audit",
+    "lovable",
+    "bolt",
+    "vibe-coding",
+    "grants",
+    "42501",
+    "pglite",
+    "cli"
+  ],
+  "homepage": "https://github.com/zkousama/rls-probe#readme",
+  "bugs": {
+    "url": "https://github.com/zkousama/rls-probe/issues"
   },
-  "description": "Finds what a visitor, or another signed-in user, can read and change in a Supabase app, by running its migrations offline",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zkousama/rls-probe.git"
+  },
+  "license": "MIT",
+  "author": "Ousama Ajebbar",
+  "type": "module",
   "bin": {
     "rls-probe": "src/cli.js"
   },
   "files": [
-    "src"
+    "src",
+    "action.yml"
   ],
   "scripts": {
     "test": "node --test test/*.test.js"
@@ -18,7 +42,9 @@
   "engines": {
     "node": ">=20"
   },
-  "license": "MIT",
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.11"
+  },
   "devDependencies": {
     "pg": "^8.23.1"
   }

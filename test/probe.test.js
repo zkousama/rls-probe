@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { splitStatements } from "../src/split.js";
@@ -100,4 +103,16 @@ test("--grants=explicit probes a project without the old default grants", () => 
   const orders = report.results.find((r) => r.table === "orders");
   assert.equal(orders.anon.read, 0, "no grant, so even a table without row-level security is closed");
   assert.equal(orders.anon.insert, false);
+});
+
+test("--fix writes the safe grants as a migration, and a second run finds nothing left to grant", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rls-probe-fix-"));
+  fs.cpSync(fixed, dir, { recursive: true });
+  const first = runWith(dir, "--fix");
+  assert.ok(first.fixWritten?.endsWith("_rls_probe_grants.sql"));
+  const sql = fs.readFileSync(first.fixWritten, "utf8");
+  assert.match(sql, /grant select, insert, update, delete on public\.notes to authenticated;/);
+  const second = runWith(dir, "--oct30").grantsChange;
+  assert.deepEqual([second.breaks, second.unsafe, second.closedNoRls], [[], [], []]);
+  fs.rmSync(dir, { recursive: true, force: true });
 });

@@ -130,3 +130,20 @@ export function renderGrants(report) {
   }
   return out.join("\n");
 }
+
+// The safe grants as a Supabase migration, so the fix is a file to review and commit.
+export function migrationFor(report, version) {
+  const lines = [
+    `-- Grants for Supabase's 2026 grants change, written by rls-probe ${version}.`,
+    "-- Each table here has row-level security whose policies already limit which rows",
+    "-- a role reaches; these grants only let those policies take effect.",
+    "",
+    ...report.breaks.flatMap((b) => b.grant),
+  ];
+  const held = [
+    ...report.unsafe.map((u) => `--   ${u.table}: ${[...new Set(u.problems)].join("; ")}`),
+    ...report.closedNoRls.map((c) => `--   ${c.table}: row-level security is off`),
+  ];
+  if (held.length) lines.push("", "-- Not granted: a grant would expose data until these are fixed.", ...held);
+  return `${lines.join("\n")}\n`;
+}

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
+import fs from "node:fs";
 import path from "node:path";
-import { grantsReport, renderGrants } from "./grants.js";
+import { grantsReport, migrationFor, renderGrants } from "./grants.js";
 import { findMigrations, loadDatabase } from "./load.js";
 import { probeTables, probeViews } from "./probe.js";
 import { findingsFrom, renderText } from "./report.js";
@@ -13,7 +14,10 @@ const json = args.includes("--json");
 // --grants=explicit runs the whole probe as a project without Supabase's old default
 // grants; --oct30 adds a section on what the grants change breaks and what's safe to grant.
 const grants = args.includes("--grants=explicit") ? "explicit" : "legacy";
-const oct30 = args.includes("--oct30");
+// --fix writes the safe grants as a new migration next to the others (it implies --oct30).
+const fix = args.includes("--fix");
+const oct30 = args.includes("--oct30") || fix;
+const VERSION = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 const target = path.resolve(args.find((a) => !a.startsWith("--")) ?? ".");
 
 const files = findMigrations(target);
@@ -34,8 +38,23 @@ findings.sort((a, b) => ({ critical: 0, high: 1, medium: 2, review: 3 })[a.sever
 
 const report = { target, grants, migrations: files.length, load: { applied: load.applied, skipped: load.skipped, failed: load.failed }, seedProblems: problems, results, views, findings };
 if (oct30) report.grantsChange = await grantsReport((await loadDatabase(files, { grants: "explicit" })).db, findings);
+if (fix) {
+  const g = report.grantsChange;
+  if (!g.breaks.length) report.fixWritten = null;
+  else {
+    const stamp = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
+    const file = path.join(path.dirname(files[0]), `${stamp}_rls_probe_grants.sql`);
+    fs.writeFileSync(file, migrationFor(g, VERSION), { flag: "wx" });
+    report.fixWritten = file;
+  }
+}
 if (json) console.log(JSON.stringify(report, null, 2));
-else console.log(renderText({ ...report, load }) + (oct30 ? renderGrants(report.grantsChange) + "\n" : ""));
+else {
+  const shown = path.relative(process.cwd(), target) || ".";
+  console.log(renderText({ ...report, target: shown.startsWith("..") ? target : shown, load }) + (oct30 ? renderGrants(report.grantsChange) + "\n" : ""));
+  if (fix) console.log(report.fixWritten ? `Wrote ${path.relative(process.cwd(), report.fixWritten)}. Read it, then apply it like any migration.` : "Nothing safe to grant, so no migration was written.");
+}
 const g = report.grantsChange;
-const grantsTrouble = g && (g.breaks.length || g.unsafe.length || g.closedNoRls.length);
+// After --fix, the grants it wrote no longer count against the exit code.
+const grantsTrouble = g && ((fix ? 0 : g.breaks.length) || g.unsafe.length || g.closedNoRls.length);
 process.exit(findings.some((f) => f.severity !== "review") || grantsTrouble ? 1 : 0);

@@ -1,0 +1,42 @@
+name: rls-probe
+description: Finds what a visitor, or another signed-in user, can read and change in a Supabase app, by running its migrations offline.
+author: Ousama Ajebbar
+branding:
+  icon: shield
+  color: green
+
+inputs:
+  path:
+    description: The app's folder, the one holding supabase/migrations.
+    default: "."
+  args:
+    description: Extra flags, for example --oct30 to check Supabase's 2026 grants change.
+    default: "--oct30"
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+    - name: Install rls-probe
+      shell: bash
+      run: npm install --omit=dev --no-audit --no-fund --prefix "$GITHUB_ACTION_PATH" > /dev/null
+    - name: Run rls-probe
+      shell: bash
+      env:
+        INPUT_PATH: ${{ inputs.path }}
+        INPUT_ARGS: ${{ inputs.args }}
+      run: |
+        set +e
+        node "$GITHUB_ACTION_PATH/src/cli.js" "$INPUT_PATH" $INPUT_ARGS > "$RUNNER_TEMP/rls-probe.txt"
+        code=$?
+        cat "$RUNNER_TEMP/rls-probe.txt"
+        {
+          echo "### rls-probe"
+          echo
+          echo '```'
+          cat "$RUNNER_TEMP/rls-probe.txt"
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+        exit $code
