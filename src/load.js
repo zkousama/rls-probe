@@ -1,10 +1,8 @@
-import fs from "node:fs";
-import path from "node:path";
 import { PGlite } from "@electric-sql/pglite";
-import { PREINSTALLED, START_PARAMS, baseSnapshot } from "./snapshot.js";
+import { LEGACY_GRANTS } from "./legacy-grants.js";
+import { CONTRIB, PREINSTALLED, START_PARAMS } from "./pglite.js";
 import { splitStatements } from "./split.js";
 
-const LEGACY_GRANTS = fs.readFileSync(new URL("./legacy-grants.sql", import.meta.url), "utf8");
 const CREATE_EXTENSION = /^create\s+extension\s+(if\s+not\s+exists\s+)?"?([\w-]+)"?/i;
 const BUILT_IN = new Set(["plpgsql", "pgcrypto", "uuid-ossp"]);
 
@@ -29,28 +27,18 @@ const REWRITE = [
   [/\bgeography\s*\([^)]*\)|\bgeometry\s*\([^)]*\)/gi, "text"],
 ];
 
-export function findMigrations(target) {
-  const candidates = [path.join(target, "supabase", "migrations"), path.join(target, "migrations"), target];
-  for (const dir of candidates) {
-    if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
-      const files = fs.readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();
-      if (files.length) return files.map((f) => path.join(dir, f));
-    }
-  }
-  return [];
-}
-
-// grants: "legacy" gives anon, authenticated and service_role every table, as
-// Supabase did by default; "explicit" gives them only what the migrations grant.
-// snapshot: the base database to start from, when the caller already has it.
-export async function loadDatabase(files, { grants = "legacy", snapshot } = {}) {
-  const statements = files.map((file) => ({ file: path.basename(file), statements: splitStatements(fs.readFileSync(file, "utf8")) }));
+// migrations: [{ name, sql }] in the order they run. snapshot: the base database
+// to start from (see snapshot.js). grants: "legacy" gives anon, authenticated and
+// service_role every table, as Supabase did by default; "explicit" gives them
+// only what the migrations grant.
+export async function loadDatabase(migrations, { grants = "legacy", snapshot }) {
+  const statements = migrations.map((m) => ({ file: m.name, statements: splitStatements(m.sql) }));
   // Each extension PGlite loads slows its start, so beyond the ones every Supabase
   // project has, it loads only those the migrations create.
   const wanted = new Set(statements.flatMap((f) => f.statements).map((s) => CREATE_EXTENSION.exec(withoutComments(s))?.[2].toLowerCase()).filter(Boolean));
   const available = await loadable(wanted);
   const db = new PGlite({
-    loadDataDir: new Blob([snapshot ?? (await baseSnapshot())]),
+    loadDataDir: snapshot instanceof Blob ? snapshot : new Blob([snapshot]),
     extensions: { ...PREINSTALLED, ...available },
     startParams: START_PARAMS,
   });
@@ -91,12 +79,9 @@ async function loadable(names) {
   for (const name of names) {
     if (BUILT_IN.has(name)) continue;
     const module = name.replace(/-/g, "_");
-    try {
-      const loaded = (await import(`@electric-sql/pglite/contrib/${module}`))[module];
-      if (loaded) out[name] = loaded;
-    } catch {
-      // Not shipped with PGlite: the statement is skipped and listed.
-    }
+    // Not shipped with PGlite: the statement is skipped and listed.
+    if (!CONTRIB[module]) continue;
+    out[name] = (await CONTRIB[module]())[module];
   }
   return out;
 }

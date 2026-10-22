@@ -13,6 +13,11 @@ inputs:
     description: Extra flags, for example --oct30 to check Supabase's 2026 grants change.
     default: "--oct30"
 
+outputs:
+  sarif:
+    description: The findings as a SARIF file, for github/codeql-action/upload-sarif.
+    value: ${{ steps.run.outputs.sarif }}
+
 runs:
   using: composite
   steps:
@@ -31,6 +36,7 @@ runs:
         path: ${{ runner.temp }}/rls-probe-cache/rls-probe
         key: rls-probe-${{ steps.install.outputs.snapshot }}
     - name: Run rls-probe
+      id: run
       shell: bash
       env:
         INPUT_PATH: ${{ inputs.path }}
@@ -38,14 +44,8 @@ runs:
         XDG_CACHE_HOME: ${{ runner.temp }}/rls-probe-cache
       run: |
         set +e
-        node "$GITHUB_ACTION_PATH/src/cli.js" "$INPUT_PATH" $INPUT_ARGS > "$RUNNER_TEMP/rls-probe.txt"
+        node "$GITHUB_ACTION_PATH/src/cli.js" "$INPUT_PATH" $INPUT_ARGS --markdown-file="$RUNNER_TEMP/rls-probe.md" --sarif-file="$RUNNER_TEMP/rls-probe.sarif"
         code=$?
-        cat "$RUNNER_TEMP/rls-probe.txt"
-        {
-          echo "### rls-probe"
-          echo
-          echo '```'
-          cat "$RUNNER_TEMP/rls-probe.txt"
-          echo '```'
-        } >> "$GITHUB_STEP_SUMMARY"
+        cat "$RUNNER_TEMP/rls-probe.md" >> "$GITHUB_STEP_SUMMARY"
+        echo "sarif=$RUNNER_TEMP/rls-probe.sarif" >> "$GITHUB_OUTPUT"
         exit $code

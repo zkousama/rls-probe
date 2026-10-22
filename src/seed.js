@@ -104,6 +104,23 @@ export function ownerPath(table, tables, seen = new Set()) {
   });
 }
 
+// How a table's rows lead to a user, as steps ending at auth.users:
+// [{ column: "user_id", table: "auth.users" }], or through a parent row
+// [{ column: "post_id", table: "posts" }, { column: "user_id", table: "auth.users" }].
+export function ownerRoute(table, tables, seen = new Set()) {
+  if (seen.has(table.name)) return null;
+  seen.add(table.name);
+  const direct = table.fks.find((fk) => !fk.audit && fk.refSchema === "auth" && fk.refTable === "users");
+  if (direct) return [{ column: direct.column, table: "auth.users" }];
+  for (const fk of table.fks) {
+    if (fk.audit || fk.refSchema !== "public" || fk.refTable === table.name) continue;
+    const parent = tables.find((t) => t.name === fk.refTable);
+    const rest = parent && ownerRoute(parent, tables, seen);
+    if (rest) return [{ column: fk.column, table: parent.name }, ...rest];
+  }
+  return null;
+}
+
 export function ownerOf(table, row, known) {
   // A row's own user column decides first; a link to another row (a notification
   // about someone's friendship) only counts when the row has no user of its own.

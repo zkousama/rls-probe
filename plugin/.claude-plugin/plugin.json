@@ -1,0 +1,10 @@
+{
+  "name": "rls-probe",
+  "version": "0.4.0",
+  "description": "Checks a Supabase app's row-level security, grants and leaked keys by running its migrations offline, and tells you what to fix.",
+  "author": { "name": "Ousama Ajebbar" },
+  "homepage": "https://github.com/zkousama/rls-probe",
+  "repository": "https://github.com/zkousama/rls-probe",
+  "license": "MIT",
+  "keywords": ["supabase", "security", "rls", "row-level-security", "lovable", "bolt"]
+}

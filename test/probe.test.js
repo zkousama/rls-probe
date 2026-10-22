@@ -177,3 +177,49 @@ test("real holes in a messy app are still found", () => {
   assert.ok(messyFindings.includes("high app_settings: Any signed-in user can change shared data"), "updated_by doesn't make it owned");
   assert.equal(messy.code, 1);
 });
+
+function runText(target, ...flags) {
+  try {
+    return execFileSync("node", [cli, target, ...flags], { encoding: "utf8" });
+  } catch (error) {
+    return error.stdout;
+  }
+}
+
+test("the plain summary leads with what someone who doesn't read SQL needs", () => {
+  const out = runText(leaky, "--oct30");
+  assert.match(out, /^rls-probe: 6 problems to fix \(5 tables checked\)\./);
+  assert.match(out, /CRITICAL {2}Anyone on the internet can see, change, delete and add every row in the orders table\./);
+  assert.match(out, /HIGH {6}Anyone on the internet can see your users' profiles, including email\./);
+  assert.match(out, /run rls-probe with --prompt/);
+  assert.match(out, /\nDetails\n/);
+});
+
+test("the fix prompt names the app's own policies, owner columns and grants", () => {
+  const out = runText(leaky, "--oct30", "--prompt");
+  assert.match(out, /Change the policy "auth write" \(using true\) on "messages" so a user can only change rows where sender_id points to a profiles row whose id = auth\.uid\(\)/);
+  assert.match(out, /add policies so each user can only see and change their own rows \(user_id = auth\.uid\(\)\)/);
+  assert.match(out, /^grant select, insert, update, delete on public\.notes to authenticated;$/m);
+  assert.match(out, /Don't grant anon or authenticated anything on messages, profiles or orders/);
+  assert.equal(runText(fixed, "--prompt"), "rls-probe found nothing to fix.\n");
+});
+
+test("SARIF points each finding at the line that creates its table, or at the code", () => {
+  const sarif = JSON.parse(runText(leaky, "--sarif"));
+  const results = sarif.runs[0].results;
+  const at = (rule) => results.find((r) => r.ruleId === rule).locations[0].physicalLocation;
+  // Paths are relative to where rls-probe runs (the repository root, in CI).
+  const app = path.relative(process.cwd(), leaky).split(path.sep).join("/");
+  assert.deepEqual(at("rls-off/critical"), { artifactLocation: { uri: `${app}/supabase/migrations/20250101000000_init.sql` }, region: { startLine: 24 } });
+  assert.deepEqual(at("service-key/critical"), { artifactLocation: { uri: `${app}/src/supabase.ts` }, region: { startLine: 3 } });
+  assert.ok(sarif.runs[0].tool.driver.rules.every((r) => r.properties["security-severity"]));
+});
+
+test("a single .sql file, such as the output of supabase db dump, is probed on its own", () => {
+  const dump = fileURLToPath(new URL("./fixtures/leaky/supabase/migrations/20250101000000_init.sql", import.meta.url));
+  const { report } = run(dump);
+  assert.equal(report.migrations, 1);
+  assert.equal(Object.fromEntries(report.results.map((r) => [r.table, r])).orders.anon.read, 1);
+  const sarif = JSON.parse(runText(dump, "--sarif"));
+  assert.ok(sarif.runs[0].results.every((r) => !r.locations[0].physicalLocation.artifactLocation.uri.includes("..")));
+});

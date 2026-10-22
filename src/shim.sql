@@ -30,7 +30,7 @@ create extension if not exists pgcrypto with schema extensions;
 create extension if not exists "uuid-ossp" with schema extensions;
 alter default privileges in schema public grant all on functions to anon, authenticated, service_role;
 -- Table and sequence grants for anon, authenticated and service_role are in
--- legacy-grants.sql: Supabase's old default, which new tables stop getting with
+-- legacy-grants.js: Supabase's old default, which new tables stop getting with
 -- the 2026 grants change.
 
 create table auth.users (

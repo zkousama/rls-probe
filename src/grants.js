@@ -4,22 +4,7 @@
 // This compares what each table's policies allow with what is actually granted
 // once the old defaults are gone, and says whether granting the rest is safe.
 
-import { Worker } from "node:worker_threads";
-
 const COMMANDS = ["SELECT", "INSERT", "UPDATE", "DELETE"];
-
-// Starts the check in a worker thread, which builds its own database without the
-// old grants while the main thread probes. Returns the function that hands it the
-// probe's findings and resolves to the report.
-export function grantsInBackground(files, snapshot) {
-  const worker = new Worker(new URL("./grants-worker.js", import.meta.url), { workerData: { files, snapshot } });
-  const failed = new Promise((_, reject) => worker.once("error", reject));
-  failed.catch(() => {}); // raised when the findings are handed over
-  return (findings) => {
-    worker.postMessage(findings);
-    return Promise.race([failed, new Promise((resolve) => worker.once("message", resolve))]);
-  };
-}
 
 export async function grantsReport(explicitDb, findings) {
   const tables = (await explicitDb.query(`

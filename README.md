@@ -11,8 +11,27 @@ other user. Nothing touches a live database.
 npx rls-probe path/to/your-app
 ```
 
-It reads `supabase/migrations/*.sql` (or `migrations/`, or a folder of `.sql`
-files) and, when it's pointed at the app itself, scans the code too.
+It reads `supabase/migrations/*.sql` (or `migrations/`, a folder of `.sql`
+files, or one `.sql` file) and, when it's pointed at the app itself, scans the
+code too. The report starts in plain words:
+
+```
+rls-probe: 6 problems to fix (5 tables checked).
+
+  CRITICAL  Anyone on the internet can see, change, delete and add every row in the orders table.
+  CRITICAL  Your secret Supabase key (the service role key) is in your app's code at src/supabase.ts:3, so anyone can copy it and skip every rule.
+  HIGH      Any signed-in user can change other users' messages.
+  HIGH      Anyone on the internet can see your users' profiles, including email.
+  HIGH      The database function delete_order() runs with full rights, and anyone on the internet can call it to change data.
+  HIGH      The edge function admin-export can be run by anyone on the internet.
+
+Worth a look, and fine if it's on purpose:
+  - The order_totals view shows its rows to anyone, skipping the rules on the tables underneath.
+  - Files in the "invoices" storage bucket can be downloaded by anyone who has the link.
+```
+
+and goes on with the details: who could read, edit, delete or create rows in
+each table, and why.
 
 ```
                          visitor (not signed in)     another signed-in user
@@ -22,12 +41,67 @@ messages    on   users   -     -     -       -       yes   yes   -       -
 notes       on   users   -     -     -       -       -     -     -       -
 orders      OFF  users   yes   yes   yes     yes     yes   yes   yes     yes
 profiles    on   users   yes   -     -       -       yes   -     -       -
-
-CRITICAL orders: Row-level security is off
-         Anyone with the public key can read, edit, delete and create every row.
-         Fix: alter table public.orders enable row level security; then add
-         policies that compare the owner column to auth.uid().
 ```
+
+## Fixing it with Lovable, Bolt, Cursor or Claude
+
+```sh
+npx rls-probe path/to/your-app --prompt
+```
+
+prints a request to paste into your AI builder. It names your own policies and
+owner columns, so the builder changes the right thing:
+
+```
+3. Any signed-in user can change other users' messages.
+   Change the policy "auth write" (using true) on "messages" so a user can only
+   change rows where sender_id points to a profiles row whose id = auth.uid().
+   Use that condition in both "using" and "with check".
+```
+
+Run rls-probe again afterwards to check the fix.
+
+## In Claude Code, Cursor and other AI agents
+
+So the agent checks its own migrations, and fixes and re-checks until nothing is
+left. In Claude Code, install the plugin (a skill and the MCP server):
+
+```text
+/plugin install rls-probe --marketplace zkousama/rls-probe
+```
+
+On older versions: `/plugin marketplace add zkousama/rls-probe`, then
+`/plugin install rls-probe@rls-probe`.
+
+In Cursor, Windsurf, Claude Desktop or any other MCP client, add the server:
+
+```json
+{
+  "mcpServers": {
+    "rls-probe": { "command": "npx", "args": ["-y", "rls-probe@0.4.0", "mcp"] }
+  }
+}
+```
+
+It has two tools: `check_supabase_security` (the report, in plain words, with what
+to change) and `write_supabase_grants_migration` (the `--fix` migration).
+
+## Output
+
+| Flag | Prints |
+|---|---|
+| (none) | The plain summary, then the details |
+| `--prompt` | The request for an AI builder |
+| `--markdown` | A Markdown report, for pull requests and AI agents |
+| `--sarif` | SARIF, for GitHub code scanning |
+| `--json` | Everything, for scripts |
+
+`--markdown-file=<path>` and `--sarif-file=<path>` write those formats as well,
+in the same run.
+
+If some tables were made in the Supabase dashboard rather than in migrations,
+check the live schema instead: `supabase db dump -f schema.sql`, then
+`npx rls-probe schema.sql`. Only the schema is read, never your data.
 
 Exits 1 when it finds something, so it can gate a build, and 2 when there was
 nothing to check: no migrations, or no tables in them.
@@ -122,6 +196,22 @@ held back listed as comments, so the change is a file to read and commit.
 
 The report goes in the job summary, and the step fails when a table leaks or
 needs a grant, so a migration that opens data never merges unnoticed.
+
+To see the findings in the repository's Security tab and on pull request lines,
+upload the SARIF file the step writes:
+
+```yaml
+permissions:
+  security-events: write
+steps:
+  - uses: actions/checkout@v7
+  - id: rls
+    uses: zkousama/rls-probe@v0
+  - if: always()
+    uses: github/codeql-action/upload-sarif@v4
+    with:
+      sarif_file: ${{ steps.rls.outputs.sarif }}
+```
 
 ## Does it match a real Supabase?
 

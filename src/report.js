@@ -1,5 +1,5 @@
 export const SENSITIVE = /(email|phone|address|latitude|longitude|zip_code|postal|password|token|secret|iban|ssn|birth|salary|stripe|customer_id|api_key)/i;
-const ORDER = { critical: 0, high: 1, medium: 2, review: 3 };
+export const ORDER = { critical: 0, high: 1, medium: 2, review: 3 };
 
 export function findingsFrom(results, views, functions, buckets) {
   const findings = [];
@@ -10,7 +10,7 @@ export function findingsFrom(results, views, functions, buckets) {
     const anonWrites = ["update", "delete", "insert"].filter((k) => anon[k]);
     const userWrites = ["update", "delete"].filter((k) => B[k]);
     if (!r.rls && (anon.read || anonWrites.length)) {
-      findings.push({ severity: "critical", where: r.table, title: "Row-level security is off",
+      findings.push({ kind: "rls-off", actions: ["read", ...anonWrites], columns: anon.exposed ?? [], severity: "critical", where: r.table, title: "Row-level security is off",
         detail: `Anyone with the public key can ${verbs(["read", ...anonWrites])} every row.${exposedTo(anon)}`,
         fix: `alter table public.${r.table} enable row level security; then add policies${r.owned ? " that compare the owner column to auth.uid()" : ""}.` });
       continue;
@@ -18,35 +18,35 @@ export function findingsFrom(results, views, functions, buckets) {
     // Visitors kept out only by missing grants still leave every row to any signed-in user.
     const userReach = [...(B.read ? ["read"] : []), ...userWrites, ...(B.insert ? ["insert"] : [])];
     if (!r.rls && userReach.length) {
-      findings.push({ severity: r.owned || userReach.length > 1 ? "high" : "review", where: r.table, title: "Row-level security is off",
+      findings.push({ kind: "rls-off-users", actions: userReach, columns: B.exposed ?? [], severity: r.owned || userReach.length > 1 ? "high" : "review", where: r.table, title: "Row-level security is off",
         detail: `Any signed-in user can ${verbs(userReach)} every row.${exposedTo(B)} Visitors are kept out only by missing grants.`,
         fix: `alter table public.${r.table} enable row level security; then add policies${r.owned ? " that compare the owner column to auth.uid()" : ""}.` });
       continue;
     }
     if (anonWrites.length) {
-      findings.push({ severity: r.owned ? "critical" : "high", where: r.table, title: "Visitors who aren't signed in can change data",
+      findings.push({ kind: "visitor-write", actions: anonWrites, severity: r.owned ? "critical" : "high", where: r.table, title: "Visitors who aren't signed in can change data",
         detail: `Without signing in, anyone can ${verbs(anonWrites)} rows.`, fix: "Limit the insert, update and delete policies to the authenticated role, and check ownership with auth.uid()." });
     }
     if (r.owned && anon.read) {
-      findings.push({ severity: anon.exposed?.length ? "high" : "review", where: r.table, title: "Visitors can read users' data",
+      findings.push({ kind: "visitor-read", actions: ["read"], columns: anon.exposed ?? [], severity: anon.exposed?.length ? "high" : "review", where: r.table, title: "Visitors can read users' data",
         detail: `Without signing in, anyone can read rows that belong to users.${exposedTo(anon)} If the table is meant to be public, like published posts, make sure nothing private is in it.`, fix: "Drop the `using (true)` select policy, or move public columns into a view and keep the table private." });
     } else if (r.owned && B.read) {
-      findings.push({ severity: B.exposed?.length ? "high" : "review", where: r.table, title: "Users can read each other's data",
+      findings.push({ kind: "user-read", actions: ["read"], columns: B.exposed ?? [], severity: B.exposed?.length ? "high" : "review", where: r.table, title: "Users can read each other's data",
         detail: `A signed-in user can read rows that belong to someone else.${exposedTo(B)}`, fix: "Change the select policy to compare the owner column to auth.uid()." });
     }
     if (userWrites.length) {
-      findings.push({ severity: "high", where: r.table, title: r.owned ? "Users can change each other's data" : "Any signed-in user can change shared data",
+      findings.push({ kind: r.owned ? "user-write" : "shared-write", actions: userWrites, severity: "high", where: r.table, title: r.owned ? "Users can change each other's data" : "Any signed-in user can change shared data",
         detail: `A signed-in user can ${verbs(userWrites)} ${r.owned ? "rows that belong to someone else" : "rows of this table"}.`,
         fix: r.owned ? "Add `using (owner = auth.uid())` to the update and delete policies." : "Keep writes to an admin role, for example with a check on a role claim or an admins table." });
     }
     if (r.owned && B.insert) {
-      findings.push({ severity: "medium", where: r.table, title: "Users can create rows in someone else's name",
+      findings.push({ kind: "impersonation", actions: ["insert"], severity: "medium", where: r.table, title: "Users can create rows in someone else's name",
         detail: "A signed-in user can insert a row whose owner is another user.", fix: "Add `with check (owner = auth.uid())` to the insert policy." });
     }
   }
   for (const v of views) {
     if (v.anonRows > 0 && !v.invoker) {
-      findings.push({ severity: "review", where: v.view, title: "View readable by anyone, without the table's rules",
+      findings.push({ kind: "view-bypass", severity: "review", where: v.view, title: "View readable by anyone, without the table's rules",
         detail: `Views run as their owner, so row-level security on the tables underneath doesn't apply. A visitor sees ${v.anonRows} rows.`,
         fix: `alter view public.${v.view} set (security_invoker = true); or revoke select from anon.` });
     }
@@ -56,12 +56,12 @@ export function findingsFrom(results, views, functions, buckets) {
     const checks = /auth\.(uid|jwt|role)\(\)/.test(f.body);
     if (checks && !f.anon) continue;
     const writes = /\b(insert\s+into|update\s+[\w."]+\s+set|delete\s+from)\b/i.test(f.body);
-    findings.push({ severity: checks || !writes ? "review" : "high", where: `${f.name}(${f.args})`, title: "Function runs with full rights and anyone can call it",
+    findings.push({ kind: "definer-function", function: f.name, callers: f.anon ? "anyone" : "users", writes, severity: checks || !writes ? "review" : "high", where: `${f.name}(${f.args})`, title: "Function runs with full rights and anyone can call it",
       detail: `It's security definer, so it skips row-level security, and ${f.anon ? "visitors who aren't signed in" : "any signed-in user"} can call it${checks ? "." : ". It never checks auth.uid()."}${writes ? "" : " It only reads, but it can still reveal data the tables would hide."}`,
       fix: `revoke execute on function public.${f.name}(${f.args}) from anon${f.anon ? ", authenticated" : ""}; or check auth.uid() inside it.` });
   }
   for (const b of buckets) {
-    if (b.public) findings.push({ severity: "review", where: `storage bucket ${b.id}`, title: "Public storage bucket",
+    if (b.public) findings.push({ kind: "public-bucket", bucket: b.id, severity: "review", where: `storage bucket ${b.id}`, title: "Public storage bucket",
       detail: "Every file in it can be downloaded by anyone who has or guesses its path.", fix: "Fine for avatars and product photos. For anything private, make the bucket private and use signed URLs." });
   }
   return findings.sort((a, b) => ORDER[a.severity] - ORDER[b.severity]);

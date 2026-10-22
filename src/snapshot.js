@@ -5,24 +5,17 @@ import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
 import { PGlite } from "@electric-sql/pglite";
-import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
-import { uuid_ossp } from "@electric-sql/pglite/contrib/uuid_ossp";
-
-// Every Supabase project has these two in schema extensions, and migrations call
-// their functions without creating them.
-export const PREINSTALLED = { pgcrypto, uuid_ossp };
-// Supabase's search_path, so those functions resolve; and 16 MB of shared buffers
-// rather than 128, since the whole database fits in a few megabytes.
-export const START_PARAMS = [...PGlite.defaultStartParams, "-c", 'search_path="$user", public, extensions', "-c", "shared_buffers=16MB"];
+import { PREINSTALLED } from "./pglite.js";
 
 // A fresh in-memory Postgres runs initdb, which takes two to three seconds. The
 // probe starts instead from a copy of a database that already holds the shim:
 // the one shipped with the package, or one built on the first run and kept in
-// the user's cache. Its name changes with PGlite's version, the shim and this
-// file, so a copy never outlives any of them.
+// the user's cache. Its name changes with PGlite's version, the shim and the
+// code that builds it, so a copy never outlives any of them. (Node only: the web
+// page fetches the shipped copy.)
 const SHIM = fs.readFileSync(new URL("./shim.sql", import.meta.url), "utf8");
 const PGLITE = JSON.parse(fs.readFileSync(path.join(path.dirname(createRequire(import.meta.url).resolve("@electric-sql/pglite")), "..", "package.json"), "utf8")).version;
-const RECIPE = crypto.createHash("sha256").update(SHIM).update(fs.readFileSync(new URL(import.meta.url))).digest("hex").slice(0, 12);
+const RECIPE = crypto.createHash("sha256").update(SHIM).update(fs.readFileSync(new URL(import.meta.url))).update(fs.readFileSync(new URL("./pglite.js", import.meta.url))).digest("hex").slice(0, 12);
 export const SNAPSHOT_NAME = `base-${PGLITE}-${RECIPE}.tar.gz`;
 export const SHIPPED = new URL(`../snapshot/${SNAPSHOT_NAME}`, import.meta.url);
 const CACHED = path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache"), "rls-probe", SNAPSHOT_NAME);

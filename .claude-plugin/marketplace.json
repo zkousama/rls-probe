@@ -1,0 +1,11 @@
+{
+  "name": "rls-probe",
+  "owner": { "name": "Ousama Ajebbar" },
+  "plugins": [
+    {
+      "name": "rls-probe",
+      "source": "./plugin",
+      "description": "Checks a Supabase app's row-level security, grants and leaked keys by running its migrations offline, and tells you what to fix."
+    }
+  ]
+}
