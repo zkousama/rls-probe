@@ -98,6 +98,22 @@ test("--oct30 suggests exactly the grants the policies need, sequences included"
   ]);
 });
 
+// Supabase's changelog revokes the old defaults from service_role too, and grants it every
+// new table in its example, so edge functions and server code need their own grants.
+test("--oct30 grants the service role every table, and the sequences behind its inserts", () => {
+  const g = runWith(newGrants, "--oct30").grantsChange;
+  assert.deepEqual(g.server.flatMap((s) => s.grant), [
+    "grant select, insert, update, delete on public.categories to service_role;",
+    "grant usage on sequence public.categories_id_seq to service_role;",
+    "grant select, insert, update, delete on public.messages to service_role;",
+    "grant select, insert, update, delete on public.notes to service_role;",
+    "grant select, insert, update, delete on public.orders to service_role;",
+    "grant select, insert, update, delete on public.profiles to service_role;",
+    "grant select, insert, update, delete on public.tags to service_role;",
+    "grant usage on sequence public.tags_id_seq to service_role;",
+  ]);
+});
+
 test("--grants=explicit probes a project without the old default grants", () => {
   const report = runWith(leaky, "--grants=explicit");
   const orders = report.results.find((r) => r.table === "orders");
@@ -112,7 +128,52 @@ test("--fix writes the safe grants as a migration, and a second run finds nothin
   assert.ok(first.fixWritten?.endsWith("_rls_probe_grants.sql"));
   const sql = fs.readFileSync(first.fixWritten, "utf8");
   assert.match(sql, /grant select, insert, update, delete on public\.notes to authenticated;/);
+  assert.match(sql, /grant select, insert, update, delete on public\.notes to service_role;/);
   const second = runWith(dir, "--oct30").grantsChange;
-  assert.deepEqual([second.breaks, second.unsafe, second.closedNoRls], [[], [], []]);
+  assert.deepEqual([second.breaks, second.server, second.unsafe, second.closedNoRls], [[], [], [], []]);
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("splits long comment headers in linear time, and keeps $a2$ bodies whole", () => {
+  const rule = `-- ${"-".repeat(75)}`;
+  const header = [rule, ...Array.from({ length: 200 }, (_, i) => `-- note ${i}`), rule].join("\n");
+  const started = Date.now();
+  const parts = splitStatements(`${header}\ncreate table t (id int);\n${header}\ndo $a2$ begin perform 1; end $a2$;`);
+  assert.equal(parts.length, 2);
+  assert.ok(parts[1].endsWith("end $a2$"));
+  assert.ok(Date.now() - started < 1000, "a backtracking regex takes minutes on this");
+});
+
+// Real apps' migrations, condensed: a pg_dump header, Supabase's pre-installed extensions,
+// BEGIN/COMMIT, realtime, pgvector, staff roles, a shared organization, a broken sign-up trigger.
+const messy = run(fileURLToPath(new URL("./fixtures/messy", import.meta.url)));
+const messyTable = Object.fromEntries(messy.report.results.map((r) => [r.table, r]));
+const messyFindings = messy.report.findings.map((f) => `${f.severity} ${f.where}: ${f.title}`);
+
+test("a messy history loads: settings end with their file, BEGIN/COMMIT is ignored, Supabase's extensions exist", () => {
+  const { failed, missing, skipped } = messy.report.load;
+  assert.deepEqual(failed.map((f) => f.error).sort(), ['relation "legacy_table" does not exist', 'relation "old_drafts" does not exist']);
+  assert.deepEqual(missing, ["legacy_table", "old_drafts"]);
+  assert.ok(skipped.some((s) => s.reason === "vector index"));
+  assert.equal(skipped.filter((s) => s.reason === "transaction control").length, 2);
+  for (const t of ["organizations", "photos", "posts", "drafts", "invoices"]) assert.ok(messyTable[t]?.anon, `${t} probed`);
+});
+
+test("a sign-up trigger that fails doesn't stop the probe", () => {
+  assert.ok(messy.report.seedProblems.some((p) => p.table === "auth.users" && /without the sign-up trigger/.test(p.error)));
+});
+
+test("the other user is a plain stranger: no staff role, not in A's organization", () => {
+  assert.equal(messyTable.invoices.B.read, 0, "B has no row in user_roles, so isn't staff");
+  assert.equal(messyTable.invoices.B.update, false);
+  assert.equal(messyTable.organizations.B.update, false, "B owns a different organization than A");
+  assert.ok(!messyFindings.some((f) => /invoices|organization/.test(f) && !f.startsWith("review")));
+});
+
+test("real holes in a messy app are still found", () => {
+  assert.ok(messyFindings.includes("critical photos: Visitors who aren't signed in can change data"), "seeded through a LIKE check");
+  assert.ok(messyFindings.includes("high posts: Visitors can read users' data"), "row_security = off didn't leak");
+  assert.ok(messyFindings.includes("high server_notes: Row-level security is off"), "reported though visitors are revoked");
+  assert.ok(messyFindings.includes("high app_settings: Any signed-in user can change shared data"), "updated_by doesn't make it owned");
+  assert.equal(messy.code, 1);
 });

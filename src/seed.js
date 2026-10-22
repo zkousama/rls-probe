@@ -9,23 +9,44 @@ export const USERS = {
 };
 
 export async function seed(db, tables) {
+  const problems = [];
   for (const [key, user] of Object.entries(USERS)) {
-    await db.query(
+    const signUp = () => db.query(
       `insert into auth.users (id, email, aud, role, raw_user_meta_data, raw_app_meta_data, email_confirmed_at)
        values ($1, $2, 'authenticated', 'authenticated', $3, '{"provider":"email"}', now())`,
       [user.id, user.email, JSON.stringify({ full_name: `User ${key}`, name: `User ${key}`, username: `user_${key.toLowerCase()}` })],
     );
+    try {
+      await signUp();
+    } catch (error) {
+      // A sign-up trigger that fails, say on a table no migration creates, would stop
+      // the whole probe. The users go in without their triggers instead.
+      if (!problems.length) problems.push({ table: "auth.users", error: `${error.message} (users were added without the sign-up trigger)` });
+      await db.exec("set session_replication_role = replica");
+      try {
+        await signUp();
+      } finally {
+        await db.exec("reset session_replication_role");
+      }
+    }
   }
   const real = tables.filter((t) => t.kind === "r" || t.kind === "p");
   const known = new Map(real.map((t) => [t.name, []]));
-  const problems = [];
   let counter = 0;
 
   for (const table of order(real)) {
-    const existing = (await db.query(`select * from ${q(table.name)}`)).rows;
+    let existing;
+    try {
+      existing = (await db.query(`select * from ${q(table.name)}`)).rows;
+    } catch (error) {
+      problems.push({ table: table.name, error: error.message });
+      continue;
+    }
     for (const row of existing) known.get(table.name).push({ row, owner: ownerOf(table, row, known) });
     const owners = new Set(known.get(table.name).map((r) => r.owner));
-    const wanted = ownerPath(table, real) ? ["A", "B"] : ["shared", "shared"];
+    // A row in a role or permission table is itself a privilege, so B, the plain
+    // signed-in user the probe acts as, gets none.
+    const wanted = ownerPath(table, real) ? (ROLE_TABLE.test(table.name) ? ["A"] : ["A", "B"]) : ["shared", "shared"];
     for (const owner of wanted) {
       if (owner !== "shared" && owners.has(owner)) continue;
       if (owner === "shared" && known.get(table.name).length >= 2) break;
@@ -34,14 +55,33 @@ export async function seed(db, tables) {
         problems.push({ table: table.name, error: "no parent row to point a required foreign key at" });
         break;
       }
+      const cols = Object.keys(values);
+      const insert = () => db.query(
+        cols.length
+          ? `insert into ${q(table.name)} (${cols.map(q).join(", ")}) values (${cols.map((c, i) => `$${i + 1}::${typeOf(table, c)}`).join(", ")}) returning *`
+          : `insert into ${q(table.name)} default values returning *`,
+        cols.map((c) => values[c]),
+      );
       try {
-        const cols = Object.keys(values);
-        const res = await db.query(
-          cols.length
-            ? `insert into ${q(table.name)} (${cols.map(q).join(", ")}) values (${cols.map((c, i) => `$${i + 1}::${typeOf(table, c)}`).join(", ")}) returning *`
-            : `insert into ${q(table.name)} default values returning *`,
-          cols.map((c) => values[c]),
-        );
+        let res;
+        try {
+          res = await insert();
+        } catch (error) {
+          // A trigger that fails, say on a table no migration creates, would leave this
+          // table and every table under it unprobed. The row goes in without triggers.
+          if (!error.where) throw error;
+          await db.exec("set session_replication_role = replica");
+          try {
+            res = await insert();
+          } finally {
+            await db.exec("reset session_replication_role");
+          }
+          problems.push({ table: table.name, error: `${error.message} (seeded without its triggers)` });
+        }
+        if (!res.rows[0]) {
+          problems.push({ table: table.name, error: "a trigger dropped the row before it was stored" });
+          break;
+        }
         known.get(table.name).push({ row: res.rows[0], owner: owner === "shared" ? ownerOf(table, res.rows[0], known) : owner });
       } catch (error) {
         problems.push({ table: table.name, error: error.message });
@@ -57,6 +97,7 @@ export function ownerPath(table, tables, seen = new Set()) {
   if (seen.has(table.name)) return false;
   seen.add(table.name);
   return table.fks.some((fk) => {
+    if (fk.audit) return false;
     if (fk.refSchema === "auth" && fk.refTable === "users") return true;
     const parent = tables.find((t) => t.name === fk.refTable && fk.refSchema === "public");
     return parent ? ownerPath(parent, tables, seen) : false;
@@ -68,7 +109,7 @@ export function ownerOf(table, row, known) {
   // about someone's friendship) only counts when the row has no user of its own.
   for (const fk of table.fks) {
     const value = row[fk.column];
-    if (value == null || fk.refSchema !== "auth" || fk.refTable !== "users") continue;
+    if (value == null || fk.audit || fk.refSchema !== "auth" || fk.refTable !== "users") continue;
     for (const [key, user] of Object.entries(USERS)) if (value === user.id) return key;
   }
   for (const fk of table.fks) {
@@ -91,6 +132,10 @@ export function rowFor(table, owner, known, n) {
     const fk = table.fks.find((f) => f.column === col.name);
     if (fk) {
       if (fk.refSchema === "auth" && fk.refTable === "users") {
+        if (fk.audit) {
+          if (col.notnull && !col.hasdefault) values[col.name] = (USERS[owner] ?? USERS.A).id;
+          continue;
+        }
         // The first user column is the owner; any other (a friend, a recipient) is C,
         // which also satisfies rules like "you can't befriend yourself".
         if (userColumns++ === 0) values[col.name] = (USERS[owner] ?? USERS.A).id;
@@ -101,8 +146,11 @@ export function rowFor(table, owner, known, n) {
         const rows = known.get(fk.refTable) ?? [];
         // A second pointer to the same table (reviewer and reviewee) gets C's row, as with user columns.
         const repeat = (parentUses[fk.refTable] = (parentUses[fk.refTable] ?? 0) + 1) > 1;
+        // B gets a different shared row than A, so B isn't put in A's organization
+        // or team by the seed itself; a policy that lets B in anyway is then a finding.
+        const shared = rows.filter((r) => r.owner === "shared");
         const pick = (repeat ? rows.find((r) => r.owner === "C") : undefined)
-          ?? rows.find((r) => r.owner === owner) ?? rows.find((r) => r.owner === "shared") ?? rows[0];
+          ?? rows.find((r) => r.owner === owner) ?? (owner === "B" ? shared[1] ?? shared[0] : shared[0]) ?? rows[0];
         if (pick) values[col.name] = pick.row[fk.refColumn];
         else if (col.notnull && !col.hasdefault) return null;
         continue;
@@ -118,20 +166,28 @@ export function rowFor(table, owner, known, n) {
 }
 
 const LOW_ROLES = /^(user|member|viewer|player|customer|student|guest|basic|reader|client|participant)$/i;
+// Labels that grant more than a plain user has, in several languages.
+const HIGH_ROLES = /admin|owner|super|staff|manag|moderat|editor|financ|direct|diretor|gerente|lead|root|master|support|agent|operat|employee|accountant|sales/i;
 
 function sample(col, n, check) {
   const type = col.type.toLowerCase();
   const name = col.name.toLowerCase();
-  if (col.labels?.length) {
-    // Seeding everyone as "admin" would hide every rule that admins bypass.
-    if (/role/.test(name)) return col.labels.find((l) => LOW_ROLES.test(l)) ?? col.labels.at(-1);
+  // A year ahead passes rules like "a game can't be in the past"; an end comes a day
+  // after its start; a birth date is decades back.
+  const later = LATER.test(name) ? 864e5 : 0;
+  const labels = col.labels?.length ? col.labels : optionsIn(check);
+  if (labels?.length) {
+    // Seeding everyone as "admin", or as finance staff, would hide every rule that
+    // staff bypass: B must be the plainest user the app has.
+    if (/role/.test(name)) return labels.find((l) => LOW_ROLES.test(l)) ?? labels.find((l) => !HIGH_ROLES.test(l)) ?? labels.at(-1);
     // Private rows are the ones worth testing: a public game is meant to be seen.
-    if (/visib|privacy|audience|access|scope/.test(name)) return col.labels.find((l) => !/public|open|everyone|all/i.test(l)) ?? col.labels[0];
-    return col.labels[0];
+    if (/visib|privacy|audience|access|scope/.test(name)) return labels.find((l) => !/public|open|everyone|all/i.test(l)) ?? labels[0];
+    return labels[0];
   }
-  if (check) {
-    const allowed = /'([^']*)'/.exec(check);
-    if (allowed) return allowed[1];
+  // A LIKE pattern (rendered ~~) gives a value once its wildcards are filled in.
+  const like = check && /(?<!!)~~\*?\s*'([^']*)'/.exec(check);
+  if (like) return like[1].replace(/%/g, `seed${n}`).replace(/_/g, "x");
+  if (check && /^(smallint|integer|bigint|int|numeric|real|double|decimal)/.test(type)) {
     const between = /between\s+\(?(-?[\d.]+)/i.exec(check) ?? />=\s*\(?(-?[\d.]+)/.exec(check);
     if (between) return Number(between[1]);
     const above = />\s*\(?(-?[\d.]+)/.exec(check);
@@ -140,21 +196,36 @@ function sample(col, n, check) {
   if (col.typcategory === "A") return "{}";
   if (type === "uuid") return crypto.randomUUID();
   if (/^(smallint|integer|bigint|int|serial)/.test(type)) return n;
-  if (/^(numeric|real|double|decimal|money)/.test(type)) return n;
+  if (/^(numeric|real|double|decimal|money)/.test(type)) {
+    // numeric(p, s) holds p - s digits before the point: 9001 overflows numeric(10,8).
+    const size = /^numeric\((\d+),\s*(\d+)\)/.exec(type);
+    return size ? Math.min(n, 10 ** (size[1] - size[2]) - 1) : n;
+  }
   if (type === "boolean") return false;
   if (/^(json|jsonb)/.test(type)) return "{}";
-  if (/^time(\(\d\))? with/.test(type) || type === "time") return "12:00:00";
-  // A year ahead passes rules like "a game can't be in the past".
-  if (type === "date") return new Date(Date.now() + 365 * 864e5).toISOString().slice(0, 10);
-  if (/^timestamp/.test(type)) return new Date(Date.now() + 365 * 864e5).toISOString();
+  if (/^time(\(\d\))? with/.test(type) || type === "time") return later ? "13:00:00" : "12:00:00";
+  if (type === "date" && /birth|dob/.test(name)) return "1990-01-01";
+  if (type === "date") return new Date(Date.now() + 365 * 864e5 + later).toISOString().slice(0, 10);
+  if (/^timestamp/.test(type)) return new Date(Date.now() + 365 * 864e5 + later).toISOString();
   if (type === "interval") return "1 day";
   if (type === "inet" || type === "cidr") return "127.0.0.1";
   if (type === "bytea") return "\\x00";
   if (name.includes("email")) return `seed${n}@example.com`;
   if (name.includes("url") || name.includes("link") || name.includes("website")) return `https://example.com/${n}`;
   if (name.includes("phone")) return `+21260000${String(n).padStart(4, "0")}`;
-  if (name.includes("slug") || name.includes("username")) return `seed-${n}`;
+  if (name.includes("username")) return `seed_${n}`;
+  if (name.includes("slug")) return `seed-${n}`;
   return `${col.name} ${n}`;
+}
+
+// The values a CHECK pins a column to (col = 'x', or col in ('x', 'y')). A quoted
+// literal anywhere else is a pattern, an interval or a bound, not a value.
+function optionsIn(check) {
+  if (!check) return null;
+  const list = /(?<![<>!])=\s*ANY\s*\(\s*\(?\s*ARRAY\s*\[([^\]]*)\]/i.exec(check);
+  if (list) return [...list[1].matchAll(/'([^']*)'/g)].map((m) => m[1]);
+  const one = /(?<![<>!])=\s*'([^']*)'/.exec(check);
+  return one ? [one[1]] : null;
 }
 
 function typeOf(table, column) {
@@ -179,6 +250,9 @@ function order(tables) {
   for (const t of tables) visit(t);
   return out;
 }
+
+const ROLE_TABLE = /(^|_)(roles?|permissions?|admins?|staff|moderators?)$/i;
+const LATER = /(^|_)(end|ends|finish|finishes|until|to|close|closes|expire|expires|due)(_|$)/;
 
 export function q(identifier) {
   return `"${identifier.replace(/"/g, '""')}"`;

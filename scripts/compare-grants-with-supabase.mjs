@@ -6,7 +6,7 @@ import { execFileSync, execSync } from "node:child_process";
 import fs from "node:fs";
 
 const [dir, grantsFile] = process.argv.slice(2);
-const status = JSON.parse(execSync("npx -y supabase@latest status -o json", { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
+const status = JSON.parse(execSync("npx -y supabase@2.121.0 status -o json", { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
 const URL_ = status.API_URL;
 const ANON = status.ANON_KEY;
 const SERVICE = status.SERVICE_ROLE_KEY;

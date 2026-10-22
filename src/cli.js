@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
-import { grantsReport, migrationFor, renderGrants } from "./grants.js";
+import { grantsInBackground, grantsReport, migrationFor, renderGrants } from "./grants.js";
 import { findMigrations, loadDatabase } from "./load.js";
 import { probeTables, probeViews } from "./probe.js";
 import { findingsFrom, renderText } from "./report.js";
 import { readBuckets, readFunctions, readSchema } from "./schema.js";
 import { seed } from "./seed.js";
+import { baseSnapshot } from "./snapshot.js";
 import { scanFiles } from "./static.js";
 
 const args = process.argv.slice(2);
@@ -26,7 +27,12 @@ if (!files.length) {
   process.exit(2);
 }
 
-const load = await loadDatabase(files, { grants });
+const snapshot = await baseSnapshot();
+// --oct30 compares against a database without the old grants. When the probe runs
+// with them, that second database loads in a worker meanwhile; when it runs without
+// them, it's the same database, and probing changed no grants.
+const grantsFor = oct30 && grants === "legacy" ? grantsInBackground(files, snapshot) : null;
+const load = await loadDatabase(files, { grants, snapshot });
 const tables = await readSchema(load.db);
 const { known, problems } = await seed(load.db, tables);
 const results = await probeTables(load.db, tables, known);
@@ -36,11 +42,11 @@ const buckets = await readBuckets(load.db);
 const findings = [...findingsFrom(results, views, functions, buckets), ...scanFiles(target)];
 findings.sort((a, b) => ({ critical: 0, high: 1, medium: 2, review: 3 })[a.severity] - ({ critical: 0, high: 1, medium: 2, review: 3 })[b.severity]);
 
-const report = { target, grants, migrations: files.length, load: { applied: load.applied, skipped: load.skipped, failed: load.failed }, seedProblems: problems, results, views, findings };
-if (oct30) report.grantsChange = await grantsReport((await loadDatabase(files, { grants: "explicit" })).db, findings);
+const report = { target, grants, migrations: files.length, load: { applied: load.applied, skipped: load.skipped, failed: load.failed, missing: load.missing }, seedProblems: problems, results, views, findings };
+if (oct30) report.grantsChange = grantsFor ? await grantsFor(findings) : await grantsReport(load.db, findings);
 if (fix) {
   const g = report.grantsChange;
-  if (!g.breaks.length) report.fixWritten = null;
+  if (!g.breaks.length && !g.server.length) report.fixWritten = null;
   else {
     const stamp = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
     const file = path.join(path.dirname(files[0]), `${stamp}_rls_probe_grants.sql`);
@@ -56,5 +62,6 @@ else {
 }
 const g = report.grantsChange;
 // After --fix, the grants it wrote no longer count against the exit code.
-const grantsTrouble = g && ((fix ? 0 : g.breaks.length) || g.unsafe.length || g.closedNoRls.length);
-process.exit(findings.some((f) => f.severity !== "review") || grantsTrouble ? 1 : 0);
+const grantsTrouble = g && ((fix ? 0 : g.breaks.length + g.server.length) || g.unsafe.length || g.closedNoRls.length);
+// 1: something to fix. 2: no tables, so nothing was checked (not an all clear).
+process.exit(findings.some((f) => f.severity !== "review") || grantsTrouble ? 1 : results.length ? 0 : 2);

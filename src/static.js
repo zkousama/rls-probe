@@ -60,7 +60,9 @@ function scanFunctions(root) {
     else if (current && /^\s*verify_jwt\s*=\s*false/.test(line)) {
       const dir = path.join(root, "supabase", "functions", current);
       const source = readAll(dir);
-      const checksCaller = /auth\.getUser|getClaims|Authorization|stripe\.webhooks\.constructEvent|constructEventAsync|x-signature|svix|verifySignature/i.test(source);
+      // A signed-in user, a webhook signature (Stripe, Svix, Supabase's own hooks through
+      // standardwebhooks), or a shared secret in a header all count as checking.
+      const checksCaller = /auth\.getUser|getClaims|Authorization|stripe\.webhooks\.constructEvent|constructEventAsync|x-signature|svix|verifySignature|standardwebhooks|new Webhook\(|timingSafeEqual|headers\.get\(\s*["'`]x-[\w-]*(secret|signature|token|key)["'`]/i.test(source);
       findings.push({
         severity: checksCaller ? "review" : "high",
         where: `supabase/functions/${current}`,

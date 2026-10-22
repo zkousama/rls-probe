@@ -15,6 +15,14 @@ export function findingsFrom(results, views, functions, buckets) {
         fix: `alter table public.${r.table} enable row level security; then add policies${r.owned ? " that compare the owner column to auth.uid()" : ""}.` });
       continue;
     }
+    // Visitors kept out only by missing grants still leave every row to any signed-in user.
+    const userReach = [...(B.read ? ["read"] : []), ...userWrites, ...(B.insert ? ["insert"] : [])];
+    if (!r.rls && userReach.length) {
+      findings.push({ severity: r.owned || userReach.length > 1 ? "high" : "review", where: r.table, title: "Row-level security is off",
+        detail: `Any signed-in user can ${verbs(userReach)} every row.${exposedTo(B)} Visitors are kept out only by missing grants.`,
+        fix: `alter table public.${r.table} enable row level security; then add policies${r.owned ? " that compare the owner column to auth.uid()" : ""}.` });
+      continue;
+    }
     if (anonWrites.length) {
       findings.push({ severity: r.owned ? "critical" : "high", where: r.table, title: "Visitors who aren't signed in can change data",
         detail: `Without signing in, anyone can ${verbs(anonWrites)} rows.`, fix: "Limit the insert, update and delete policies to the authenticated role, and check ownership with auth.uid()." });
@@ -64,24 +72,36 @@ export function renderText({ target, load, seedProblems, results, findings }) {
   out.push(`rls-probe ${target}`, "");
   out.push(`Migrations: ${load.applied} statements applied, ${load.skipped.length} skipped, ${load.failed.length} failed.`);
   if (load.failed.length) for (const f of load.failed.slice(0, 10)) out.push(`  failed in ${f.file}: ${f.error}`, `    ${f.statement}`);
+  if (load.missing?.length) {
+    out.push("", `Never created, so not checked: ${load.missing.join(", ")}. The migrations use these tables but no file creates them; often they were made in the dashboard before migrations were kept.`);
+  }
   for (const p of seedProblems) out.push(`  couldn't seed ${p.table}: ${p.error}`);
-  out.push("", "Who can reach a user's rows (user A's), other than A:", "");
-  const yes = (v) => (v ? "yes" : "-");
-  const rows = results.filter((r) => r.anon).map((r) => [
-    r.table, r.rls ? "on" : "OFF", r.owned ? "users" : "shared",
-    yes(r.anon.read), yes(r.anon.update), yes(r.anon.delete), yes(r.anon.insert),
-    yes(r.B.read), yes(r.B.update), yes(r.B.delete), yes(r.B.insert),
-  ]);
-  const head = [["table", "RLS", "rows", "read", "edit", "delete", "create", "read", "edit", "delete", "create"]];
-  const widths = head[0].map((_, i) => Math.max(...[...head, ...rows].map((r) => r[i].length)));
-  const line = (r) => r.map((c, i) => c.padEnd(widths[i])).join("  ").trimEnd();
-  const lead = widths.slice(0, 3).reduce((a, w) => a + w + 2, 0);
-  const visitor = widths.slice(3, 7).reduce((a, w) => a + w + 2, 0);
-  out.push(`${" ".repeat(lead)}${"visitor (not signed in)".padEnd(visitor)}another signed-in user`);
-  out.push(line(head[0]));
-  for (const r of rows) out.push(line(r));
-  for (const r of results.filter((x) => x.skipped)) out.push(`${r.table}: not probed (${r.skipped})`);
-  out.push("", "\"shared\" tables have no owner, like a list of categories: being readable by everyone is often intended.");
+  if (!results.length) {
+    out.push("", "No tables in public, so nothing was checked. This is not an all clear: the tables may have been made in the dashboard, outside these migrations.");
+  } else {
+    out.push("", "Who can reach a user's rows (user A's), other than A:", "");
+    const yes = (v) => (v ? "yes" : "-");
+    const rows = results.filter((r) => r.anon).map((r) => [
+      r.table, r.rls ? "on" : "OFF", r.owned ? "users" : "shared",
+      yes(r.anon.read), yes(r.anon.update), yes(r.anon.delete), yes(r.anon.insert),
+      yes(r.B.read), yes(r.B.update), yes(r.B.delete), yes(r.B.insert),
+    ]);
+    const head = [["table", "RLS", "rows", "read", "edit", "delete", "create", "read", "edit", "delete", "create"]];
+    const widths = head[0].map((_, i) => Math.max(...[...head, ...rows].map((r) => r[i].length)));
+    const line = (r) => r.map((c, i) => c.padEnd(widths[i])).join("  ").trimEnd();
+    const lead = widths.slice(0, 3).reduce((a, w) => a + w + 2, 0);
+    const visitor = widths.slice(3, 7).reduce((a, w) => a + w + 2, 0);
+    out.push(`${" ".repeat(lead)}${"visitor (not signed in)".padEnd(visitor)}another signed-in user`);
+    out.push(line(head[0]));
+    for (const r of rows) out.push(line(r));
+    for (const r of results.filter((x) => x.skipped)) out.push(`${r.table}: not probed (${r.skipped})`);
+    for (const r of results.filter((x) => x.anon)) {
+      for (const who of ["anon", "B"]) {
+        if (r[who].insertUntested) out.push(`${r.table}: couldn't test creating rows as ${who === "anon" ? "a visitor" : "another user"} (${r[who].insertUntested})`);
+      }
+    }
+    out.push("", "\"shared\" tables have no owner, like a list of categories: being readable by everyone is often intended.");
+  }
   out.push("", findings.length ? `${findings.length} finding${findings.length === 1 ? "" : "s"}` : "No findings.", "");
   for (const f of findings) {
     out.push(`${f.severity.toUpperCase().padEnd(8)} ${f.where}: ${f.title}`);

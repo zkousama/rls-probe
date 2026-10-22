@@ -1,6 +1,6 @@
 {
   "name": "rls-probe",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Finds what a visitor, or another signed-in user, can read and change in a Supabase app, and which grants are safe after Supabase's 2026 grants change, by running its migrations offline",
   "keywords": [
     "supabase",
@@ -34,16 +34,18 @@
   },
   "files": [
     "src",
+    "snapshot",
     "action.yml"
   ],
   "scripts": {
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "prepack": "node scripts/build-snapshot.mjs"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
-    "@electric-sql/pglite": "^0.5.11"
+    "@electric-sql/pglite": "0.5.11"
   },
   "devDependencies": {
     "pg": "^8.23.1"

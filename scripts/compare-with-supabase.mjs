@@ -4,7 +4,7 @@
 import { execSync, execFileSync } from "node:child_process";
 
 const V = process.argv[2];
-const status = JSON.parse(execSync("npx -y supabase@latest status -o json", { cwd: V, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
+const status = JSON.parse(execSync("npx -y supabase@2.121.0 status -o json", { cwd: V, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
 const URL_ = status.API_URL;
 const ANON = status.ANON_KEY ?? status.PUBLISHABLE_KEY;
 const SERVICE = status.SERVICE_ROLE_KEY ?? status.SECRET_KEY;

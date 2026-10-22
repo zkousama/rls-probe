@@ -29,7 +29,8 @@ CRITICAL orders: Row-level security is off
          policies that compare the owner column to auth.uid().
 ```
 
-Exits 1 when it finds something, so it can gate a build.
+Exits 1 when it finds something, so it can gate a build, and 2 when there was
+nothing to check: no migrations, or no tables in them.
 
 ## Why
 
@@ -61,10 +62,10 @@ and still let one user edit another's rows. So this doesn't read them. It tries.
 
 ## Supabase's 2026 grants change
 
-Supabase used to grant `anon` and `authenticated` every table in `public`, and
-left row-level security to decide which rows. Projects created since May 30,
-2026 no longer get those grants for new tables, and from October 30, 2026 the
-same goes for new tables in every project. Tables that already exist keep
+Supabase used to grant `anon`, `authenticated` and `service_role` every table
+in `public`, and left row-level security to decide which rows. Projects created
+since May 30, 2026 no longer get those grants for new tables, and from October
+30, 2026 the same goes for new tables in every project. Tables that already exist keep
 their grants. A table without one answers `permission denied` (42501).
 
 The tempting fix for that error is a grant on every table. On a table with
@@ -83,6 +84,16 @@ Safe to grant: row-level security already limits these to the right rows.
   grant select on public.categories to anon, authenticated;
   grant select, insert, update, delete on public.notes to authenticated;
 
+Your server too: edge functions and server code using the service role key get
+42501 on these. The key skips row-level security and never reaches a browser, so
+granting it is safe.
+  grant select, insert, update, delete on public.categories to service_role;
+  grant usage on sequence public.categories_id_seq to service_role;
+  grant select, insert, update, delete on public.messages to service_role;
+  grant select, insert, update, delete on public.notes to service_role;
+  grant select, insert, update, delete on public.orders to service_role;
+  grant select, insert, update, delete on public.profiles to service_role;
+
 Fix before granting: a grant would open these up.
   messages: Users can change each other's data
   profiles: Visitors can read users' data
@@ -93,7 +104,9 @@ fix for 42501, a grant on every table, would expose every row.
 ```
 
 The grants it suggests are the ones each table's policies need, including
-`usage` on the sequence behind a `serial` id when users insert rows.
+`usage` on the sequence behind a `serial` id when users insert rows. The service
+role loses its old grants too, so edge functions and server code need their own;
+those are listed apart, for every table.
 `--fix` writes them as a new migration next to the others, with the tables it
 held back listed as comments, so the change is a file to read and commit.
 `--grants=explicit` runs the whole probe as a project without the old grants.
@@ -126,26 +139,49 @@ shouldn't. 30 of 30 checks pass on `test/fixtures/new-grants`.
 grants marked safe, checks through the API that those tables answer and the
 others still refuse, then runs the probe against the real database to show the
 grants let nobody reach anything the rules didn't already allow, and that each
-user can still do everything to their own rows that they could before. On a
-15-table open-source app built with Lovable, 70 of 70 checks passed.
+user can still do everything to their own rows that they could before. It also
+checks the service role key: each table refuses it before the grants and answers
+it after. On a 15-table open-source app built with Lovable, 100 of 100 checks
+passed with 0.3.0.
 
 The in-memory database has the parts of Supabase that access rules depend on:
 the `anon`, `authenticated` and `service_role` roles, their default grants,
-`auth.uid()`, `auth.jwt()`, `auth.users` and the storage tables. Statements that
-only matter to a hosted project (realtime publications, comments, extensions
-that don't run in memory, like `vector`) are skipped and listed in the report.
+`auth.uid()`, `auth.jwt()`, `auth.users` and the storage tables. It also has
+what migrations lean on without creating: `pgcrypto` and `uuid-ossp` in schema
+`extensions` with Supabase's search path, the realtime publication and tables,
+pg_cron's tables, and stand-ins for pgvector's types. Each migration file runs
+in a fresh session, as Supabase runs it, so a pg_dump header's `search_path` or
+`row_security = off` ends with its file. Statements run one at a time, so one
+failure inside `BEGIN ... COMMIT` doesn't take the rest of the file with it.
+Statements that only matter to a hosted project (comments, ownership changes,
+vector indexes, extensions PGlite doesn't ship) are skipped and listed in the
+report.
+
+Tables the migrations use but never create, often made in the dashboard before
+migrations were kept, are listed at the top of the report, since they can't be
+checked.
+
+On 25 open-source apps built with Lovable, Bolt or by hand (7 to 671 migration
+files each), every run finishes, most in 2 to 4 seconds.
 
 ## Limits
 
 - It seeds one row per user per table. A policy that depends on data the seed
-  doesn't create, such as team membership or an `is_published` flag, may look
-  stricter here than it is with real data.
+  doesn't create, such as an `is_published` flag, may look stricter here than
+  it is with real data.
+- The other user is a stranger: no row in role or permission tables, and their
+  own organization or team rather than A's. What a teammate in the same
+  organization can do isn't tested.
+- When a trigger fails while seeding, the row goes in without its triggers and
+  the report says so. A create the probe couldn't test (a unique key, a
+  trigger) is listed rather than counted as refused.
 - Tables whose primary key is also the user's id, like `profiles`, can't be
   tested for "create a row for someone else": that row already exists.
 - It reads storage bucket settings, not storage policies.
-- By default it gives `anon` and `authenticated` every table in `public`, as Supabase projects have
-  done. For a project created since May 30, 2026, use `--grants=explicit`, or the report can show more
-  than the API would let through.
+- By default it gives `anon`, `authenticated` and `service_role` every table in
+  `public`, as Supabase projects have done. For a project created since May 30,
+  2026, use `--grants=explicit`, or the report can show more than the API would
+  let through.
 - A finding is a place to look. Some tables are meant to be public; the report
   says so where it can't tell.
 

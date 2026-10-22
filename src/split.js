@@ -1,9 +1,15 @@
+// Postgres dollar-quote tags: $$, $body$, $a2$ (a digit can't come first).
+const DOLLAR = /\$([A-Za-z_][A-Za-z0-9_]*)?\$/y;
+
 // Splits a SQL file into statements. Migrations from the Supabase CLI hold
 // function bodies in dollar quotes, which a split on ";" would cut apart.
 export function splitStatements(sql) {
   const out = [];
   let start = 0;
   let i = 0;
+  // Whether the current statement has anything besides comments and whitespace.
+  // Tracked while walking, in linear time: long comment headers are common.
+  let code = false;
   const n = sql.length;
   while (i < n) {
     const c = sql[i];
@@ -15,6 +21,7 @@ export function splitStatements(sql) {
       const end = sql.indexOf("*/", i + 2);
       i = end === -1 ? n : end + 2;
     } else if (c === "'" || c === '"') {
+      code = true;
       i++;
       while (i < n) {
         if (sql[i] === c && sql[i + 1] === c) i += 2;
@@ -22,7 +29,9 @@ export function splitStatements(sql) {
         else i++;
       }
     } else if (c === "$") {
-      const m = /^\$[A-Za-z_]*\$/.exec(sql.slice(i));
+      code = true;
+      DOLLAR.lastIndex = i;
+      const m = DOLLAR.exec(sql);
       if (m) {
         const end = sql.indexOf(m[0], i + m[0].length);
         i = end === -1 ? n : end + m[0].length;
@@ -31,13 +40,16 @@ export function splitStatements(sql) {
       push(sql.slice(start, i));
       i++;
       start = i;
-    } else i++;
+    } else {
+      if (c !== " " && c !== "\n" && c !== "\t" && c !== "\r") code = true;
+      i++;
+    }
   }
   push(sql.slice(start));
   return out;
 
   function push(text) {
-    const trimmed = text.trim();
-    if (trimmed && !/^(--[^\n]*\n?|\/\*[\s\S]*?\*\/|\s)*$/.test(trimmed)) out.push(trimmed);
+    if (code) out.push(text.trim());
+    code = false;
   }
 }

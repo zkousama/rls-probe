@@ -1,3 +1,5 @@
+// Columns that record who last touched a row, not whose it is.
+const AUDIT = /^(updated|modified|edited|changed|deleted|approved|reviewed|verified|archived|last_(updated|modified|edited|changed))_by(_id|_user_id)?$/i;
 const OWNER_NAME = /^(user|owner|author|creator|created_by|sender|requester|addressee|recipient|member|account|customer)(_id)?$|_user_id$/i;
 
 // Reads what the probe needs from the catalog: tables, their columns, primary
@@ -67,6 +69,7 @@ export async function readSchema(db) {
   const byName = new Map(result.map((t) => [t.name, t]));
   for (const t of result) {
     for (const fk of t.fks) {
+      fk.audit = AUDIT.test(fk.column);
       if (fk.refSchema === "public") {
         const parent = byName.get(fk.refTable);
         fk.refColumn = parent?.columns.find((c) => c.num === fk.refColumnNum)?.name;

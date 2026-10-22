@@ -3,8 +3,10 @@
 // app's supabase/migrations, run `supabase start` there, then:
 //   rls-probe <app> --oct30 --json > report.json   (on the migrations without the opt-in)
 //   node scripts/verify-oct30-on-supabase.mjs <supabase folder> report.json <grants.sql>
-// grants.sql holds the "Safe to grant" lines. It checks the API refuses before and answers
-// after, and runs the probe against the real database to show the grants open nothing new.
+// grants.sql holds the "Safe to grant" and "Your server too" lines, or is the migration --fix
+// writes. It checks the API refuses before and answers after, for a signed-in user and for the
+// service role key, and runs the probe against the real database to show the grants open
+// nothing new.
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 import pg from "pg";
@@ -17,7 +19,8 @@ const [sbDir, reportFile, grantsFile] = process.argv.slice(2);
 const report = JSON.parse(fs.readFileSync(reportFile, "utf8"));
 const safe = report.grantsChange.breaks.map((b) => b.table);
 const fixFirst = report.grantsChange.unsafe.map((u) => u.table);
-const status = JSON.parse(execSync("npx -y supabase@latest status -o json", { cwd: sbDir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
+const server = (report.grantsChange.server ?? []).map((s) => s.table);
+const status = JSON.parse(execSync("npx -y supabase@2.121.0 status -o json", { cwd: sbDir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
 const checks = [];
 const check = (name, ok, detail = "") => checks.push({ name, ok, detail });
 
@@ -31,10 +34,20 @@ const get = async (table) => {
   return { status: res.status, body: await res.text() };
 };
 
-// 1. Before: every table refuses with 42501.
+// The service role key, as edge functions and server code send it.
+const getAsServer = async (table) => {
+  const res = await fetch(`${status.API_URL}/rest/v1/${table}?select=*&limit=1`, { headers: { apikey: status.SERVICE_ROLE_KEY, Authorization: `Bearer ${status.SERVICE_ROLE_KEY}` } });
+  return { status: res.status, body: await res.text() };
+};
+
+// 1. Before: every table refuses with 42501, the service role included.
 for (const t of [...safe, ...fixFirst]) {
   const r = await get(t);
   check(`before: ${t} refuses (42501)`, r.body.includes("42501"), `${r.status}`);
+}
+for (const t of server) {
+  const r = await getAsServer(t);
+  check(`before: ${t} refuses the service role (42501)`, r.body.includes("42501"), `${r.status}`);
 }
 
 // 2. Apply only the suggested grants.
@@ -50,6 +63,10 @@ for (const t of safe) {
 for (const t of fixFirst) {
   const r = await get(t);
   check(`after: ${t} still refuses (not granted)`, r.body.includes("42501"), `${r.status}`);
+}
+for (const t of server) {
+  const r = await getAsServer(t);
+  check(`after: ${t} answers the service role`, r.status === 200, `${r.status} ${r.status === 200 ? "" : r.body.slice(0, 120)}`);
 }
 
 // 4. rls-probe's probe, against the real database. The adapter gives pg the

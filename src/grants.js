@@ -4,7 +4,22 @@
 // This compares what each table's policies allow with what is actually granted
 // once the old defaults are gone, and says whether granting the rest is safe.
 
+import { Worker } from "node:worker_threads";
+
 const COMMANDS = ["SELECT", "INSERT", "UPDATE", "DELETE"];
+
+// Starts the check in a worker thread, which builds its own database without the
+// old grants while the main thread probes. Returns the function that hands it the
+// probe's findings and resolves to the report.
+export function grantsInBackground(files, snapshot) {
+  const worker = new Worker(new URL("./grants-worker.js", import.meta.url), { workerData: { files, snapshot } });
+  const failed = new Promise((_, reject) => worker.once("error", reject));
+  failed.catch(() => {}); // raised when the findings are handed over
+  return (findings) => {
+    worker.postMessage(findings);
+    return Promise.race([failed, new Promise((resolve) => worker.once("message", resolve))]);
+  };
+}
 
 export async function grantsReport(explicitDb, findings) {
   const tables = (await explicitDb.query(`
@@ -13,8 +28,21 @@ export async function grantsReport(explicitDb, findings) {
     where n.nspname = 'public' and c.relkind in ('r', 'p') order by c.relname`)).rows;
   const policies = (await explicitDb.query(`select tablename as table, cmd, roles::text[] as roles, qual, with_check as check from pg_policies where schemaname = 'public'`)).rows;
 
-  const out = { breaks: [], unsafe: [], closedNoRls: [], fine: [], noPolicies: [] };
+  const out = { breaks: [], unsafe: [], closedNoRls: [], fine: [], noPolicies: [], server: [] };
   for (const t of tables) {
+    // The service role key, used by edge functions and server code, loses the old
+    // grants too. It skips row-level security and never reaches a browser, so
+    // granting it every table is always safe, policies or not.
+    const serverMissing = [];
+    for (const cmd of COMMANDS) if (!(await hasTablePrivilege(explicitDb, "service_role", t.name, cmd))) serverMissing.push({ role: "service_role", cmd });
+    const serverSequences = [];
+    for (const seq of await serialSequences(explicitDb, t.name)) {
+      if (!(await hasSequencePrivilege(explicitDb, "service_role", seq))) serverSequences.push({ role: "service_role", seq });
+    }
+    if (serverMissing.length || serverSequences.length) {
+      out.server.push({ table: t.name, missing: serverMissing, grant: [...grantLines(t.name, serverMissing), ...sequenceLines(serverSequences)] });
+    }
+
     const needed = new Set();
     for (const p of policies.filter((x) => x.table === t.name)) {
       // A policy for everyone only lets signed-in users through when every alternative
@@ -35,8 +63,7 @@ export async function grantsReport(explicitDb, findings) {
     const missing = [];
     for (const key of needed) {
       const [role, cmd] = key.split(" ");
-      const ok = (await explicitDb.query(`select has_table_privilege($1, $2, $3) as ok`, [role, `public.${quote(t.name)}`, cmd])).rows[0].ok;
-      if (!ok) missing.push({ role, cmd });
+      if (!(await hasTablePrivilege(explicitDb, role, t.name, cmd))) missing.push({ role, cmd });
     }
     const problems = findings.filter((f) => f.where === t.name && f.severity !== "review").map((f) => f.title);
     if (!t.rls) {
@@ -57,9 +84,7 @@ export async function grantsReport(explicitDb, findings) {
     const sequences = [];
     for (const role of new Set(missing.filter((m) => m.cmd === "INSERT").map((m) => m.role))) {
       for (const seq of await serialSequences(explicitDb, t.name)) {
-        if (!(await explicitDb.query(`select has_sequence_privilege($1, $2, 'USAGE') as ok`, [role, `public.${quote(seq)}`])).rows[0].ok) {
-          sequences.push({ role, seq });
-        }
+        if (!(await hasSequencePrivilege(explicitDb, role, seq))) sequences.push({ role, seq });
       }
     }
     if (problems.length) out.unsafe.push({ table: t.name, missing, problems });
@@ -70,11 +95,17 @@ export async function grantsReport(explicitDb, findings) {
 
 async function anyGrant(db, table) {
   for (const role of ["anon", "authenticated"]) {
-    for (const cmd of COMMANDS) {
-      if ((await db.query(`select has_table_privilege($1, $2, $3) as ok`, [role, `public.${quote(table)}`, cmd])).rows[0].ok) return true;
-    }
+    for (const cmd of COMMANDS) if (await hasTablePrivilege(db, role, table, cmd)) return true;
   }
   return false;
+}
+
+async function hasTablePrivilege(db, role, table, cmd) {
+  return (await db.query(`select has_table_privilege($1, $2, $3) as ok`, [role, `public.${quote(table)}`, cmd])).rows[0].ok;
+}
+
+async function hasSequencePrivilege(db, role, seq) {
+  return (await db.query(`select has_sequence_privilege($1, $2, 'USAGE') as ok`, [role, `public.${quote(seq)}`])).rows[0].ok;
 }
 
 async function serialSequences(db, table) {
@@ -117,6 +148,10 @@ export function renderGrants(report) {
     out.push("", "Safe to grant: row-level security already limits these to the right rows.");
     for (const b of report.breaks) for (const line of b.grant) out.push(`  ${line}`);
   }
+  if (report.server.length) {
+    out.push("", "Your server too: edge functions and server code using the service role key get 42501 on these. The key skips row-level security and never reaches a browser, so granting it is safe.");
+    for (const s of report.server) for (const line of s.grant) out.push(`  ${line}`);
+  }
   if (report.unsafe.length) {
     out.push("", "Fix before granting: a grant would open these up.");
     for (const u of report.unsafe) out.push(`  ${u.table}: ${[...new Set(u.problems)].join("; ")}`);
@@ -133,13 +168,23 @@ export function renderGrants(report) {
 
 // The safe grants as a Supabase migration, so the fix is a file to review and commit.
 export function migrationFor(report, version) {
-  const lines = [
-    `-- Grants for Supabase's 2026 grants change, written by rls-probe ${version}.`,
-    "-- Each table here has row-level security whose policies already limit which rows",
-    "-- a role reaches; these grants only let those policies take effect.",
-    "",
-    ...report.breaks.flatMap((b) => b.grant),
-  ];
+  const lines = [`-- Grants for Supabase's 2026 grants change, written by rls-probe ${version}.`];
+  if (report.breaks.length) {
+    lines.push(
+      "-- Each table here has row-level security whose policies already limit which rows",
+      "-- a role reaches; these grants only let those policies take effect.",
+      "",
+      ...report.breaks.flatMap((b) => b.grant),
+    );
+  }
+  if (report.server.length) {
+    lines.push(
+      "",
+      "-- The service role key, used by edge functions and server code, skips row-level",
+      "-- security and never reaches a browser, so it gets every table.",
+      ...report.server.flatMap((s) => s.grant),
+    );
+  }
   const held = [
     ...report.unsafe.map((u) => `--   ${u.table}: ${[...new Set(u.problems)].join("; ")}`),
     ...report.closedNoRls.map((c) => `--   ${c.table}: row-level security is off`),

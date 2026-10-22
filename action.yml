@@ -20,13 +20,22 @@ runs:
       with:
         node-version: 22
     - name: Install rls-probe
+      id: install
       shell: bash
-      run: npm install --omit=dev --no-audit --no-fund --prefix "$GITHUB_ACTION_PATH" > /dev/null
+      run: |
+        npm install --omit=dev --no-audit --no-fund --prefix "$GITHUB_ACTION_PATH" > /dev/null
+        node --input-type=module -e 'import { pathToFileURL } from "node:url"; const { SNAPSHOT_NAME } = await import(pathToFileURL(process.argv[1] + "/src/snapshot.js")); console.log(`snapshot=${SNAPSHOT_NAME}`)' "$GITHUB_ACTION_PATH" >> "$GITHUB_OUTPUT"
+    # The base database the probe starts from, kept between runs so they skip building it.
+    - uses: actions/cache@v6
+      with:
+        path: ${{ runner.temp }}/rls-probe-cache/rls-probe
+        key: rls-probe-${{ steps.install.outputs.snapshot }}
     - name: Run rls-probe
       shell: bash
       env:
         INPUT_PATH: ${{ inputs.path }}
         INPUT_ARGS: ${{ inputs.args }}
+        XDG_CACHE_HOME: ${{ runner.temp }}/rls-probe-cache
       run: |
         set +e
         node "$GITHUB_ACTION_PATH/src/cli.js" "$INPUT_PATH" $INPUT_ARGS > "$RUNNER_TEMP/rls-probe.txt"
