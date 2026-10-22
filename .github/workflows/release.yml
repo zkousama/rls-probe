@@ -1,0 +1,35 @@
+name: release
+
+# Pushing a version tag (v0.5.0) publishes that version to npm by trusted
+# publishing: no npm login or token, and npm shows the repository and workflow
+# each release was built from. Then the Action's major tag (v0) moves to it.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write # to move the major tag
+  id-token: write # trusted publishing
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm 11.5.1 or later.
+      - run: npm install -g npm@11.8.0
+      - name: Every version names the tag
+        run: node scripts/version.mjs check "$GITHUB_REF_NAME"
+      - run: npm install --no-audit --no-fund
+      - run: npm test
+      - run: npm publish
+      - name: Move the major tag the GitHub Action is used by
+        run: |
+          major="${GITHUB_REF_NAME%%.*}"
+          git tag -f "$major"
+          git push -f origin "$major"
