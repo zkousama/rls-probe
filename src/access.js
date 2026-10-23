@@ -4,20 +4,23 @@
 //   "access": {
 //     "posts":            { "read": "everyone", "add": "signed-in", "change": "owner" },
 //     "contact_messages": { "read": "server",   "add": "everyone",  "change": "server" },
-//     "bucket:avatars":   { "read": "everyone", "add": "owner",     "change": "owner" },
+//     "bucket:avatars":   { "read": "everyone", "add": "signed-in", "change": "owner" },
 //     "function:delete_order": { "call": "server" }
 //   }
 //
 // Levels, most open first: everyone (visitors too), signed-in (any signed-in user), team
 // (members of the same group), owner (the row's own user) and server (only server code, with
-// the service role). "add" means adding rows of one's own; adding them in someone else's name
-// is never declared, and stays a problem.
+// the service role). "add" means adding rows of one's own, so "team" or "owner" there is the same
+// as "signed-in", and so it is for "call"; adding rows in someone else's name is never declared,
+// and stays a problem.
 import { findingId } from "./accept.js";
 
 export const LEVELS = ["server", "owner", "team", "signed-in", "everyone"];
 const rank = (level) => LEVELS.indexOf(level);
 export const VERBS = { read: "see", add: "add", change: "change or delete", call: "call" };
 const WORDS = { everyone: "anyone, signed in or not,", "signed-in": "any signed-in user", team: "members of the same team", owner: "only the row's owner", server: "only your server code" };
+// "but only signed-in users can": who can, when it's fewer than declared.
+const FEWER = { "signed-in": "signed-in users", team: "members of the same team", owner: "the row's owner", server: "your server code" };
 
 // "see rows in posts", "add files to the avatars bucket", "call delete_order()".
 export function doing(verbs, key) {
@@ -36,7 +39,7 @@ export function doing(verbs, key) {
 function saying(declared, verbs, key) {
   const byLevel = {};
   for (const v of verbs) (byLevel[declared[v]] ??= []).push(v);
-  return Object.entries(byLevel).map(([level, vs]) => `${WORDS[level]} may ${doing(vs, key)}`).join("; ");
+  return Object.entries(byLevel).map(([level, vs]) => `${describeLevel(level, key)} may ${doing(vs, key)}`).join("; ");
 }
 
 // What the probe saw each table, bucket and function allow, as levels.
@@ -73,7 +76,7 @@ export function readAccess(config) {
       if (!VERBS[verb]) problems.push(`rls-probe.json: "${name}" has "${verb}", which isn't one of ${Object.keys(VERBS).join(", ")}.`);
       else if (typeof level === "string" && level.startsWith("?")) unanswered.push(`${name} (${verb})`);
       else if (!LEVELS.includes(level)) problems.push(`rls-probe.json: "${name}" ${verb} is "${level}"; use one of ${LEVELS.join(", ")}.`);
-      else (entries[name] ??= {})[verb] = level;
+      else (entries[name] ??= {})[verb] = ["add", "call"].includes(verb) && ["team", "owner"].includes(level) ? "signed-in" : level;
     }
   }
   if (unanswered.length) problems.push(`rls-probe.json still has ${unanswered.length} question${unanswered.length === 1 ? "" : "s"} to answer (${unanswered.slice(0, 4).join(", ")}${unanswered.length > 4 ? ", ..." : ""}).`);
@@ -128,16 +131,19 @@ export function applyAccess(report, entries) {
       const already = [...covered].some((c) => c.startsWith(`${name} `) && c.includes(verb));
       if (status === "too open" && !already) {
         findings.push({ kind: "access-too-open", verb, where: name, severity: "high", declared: level, observed: now, title: "Allows more than rls-probe.json says",
-          detail: `rls-probe.json says ${WORDS[level]} may ${doing([verb], name)}, but ${WORDS[now]} can.` });
+          detail: `rls-probe.json says ${describeLevel(level, name)} may ${doing([verb], name)}, but ${describeLevel(now, name)} can.` });
       }
       if (status === "too closed") {
         findings.push({ kind: "access-too-closed", verb, where: name, severity: "review", declared: level, observed: now, title: "Allows less than rls-probe.json says",
-          detail: `rls-probe.json says ${WORDS[level]} may ${doing([verb], name)}, but only ${WORDS[now].replace(/^only /, "")} can, so that part of the app may not work.` });
+          detail: `rls-probe.json says ${describeLevel(level, name)} may ${doing([verb], name)}, but ${describeFewer(now, name)} can, so that part of the app may not work.` });
       }
     }
   }
   return { findings, accepted, comparison };
 }
+
+// The intent reasons that say only server code uses a table (see intent.js).
+const SERVER_ONLY = /only with the service role|plain SQL|no code in this repository|no app code reaches|not for the app's users/;
 
 // A first rls-probe.json "access" for this app: what the code shows each table is meant to
 // allow where it shows it, and a question ("? ...") where only its owner can say. The
@@ -153,15 +159,14 @@ export function draftAccess(report) {
     const ask = (verb) => `? ${LEVELS.slice().reverse().join(" | ")} (now: ${now[verb]})`;
     if (name.startsWith("function:")) {
       entry.call = f?.intent?.verdict === "mistake" && /calls it only with the service role|no app code calls it/.test(reasons[0] ?? "") ? "server" : ask("call");
-    } else if (f?.intent?.verdict === "mistake" && /only with the service role|plain SQL|no code in this repository|no app code reaches|not for the app's users/.test(reasons[0] ?? "")) {
-      // Only server code uses it.
-      Object.assign(entry, { read: "server", add: "server", change: "server" });
     } else {
       for (const verb of ["read", "add", "change"]) {
         const about = report.findings.filter((x) => keyOf(x) === name && verbsOf(x).includes(verb));
         // Nothing found for this verb: what the database allows is already as tight as the
-        // probe can tell, so it's written down as is.
+        // probe can tell, so it's written down as is. A draft never adds a finding of its own.
         if (!about.length) entry[verb] = now[verb];
+        // Only server code uses it: for what was found, not for what wasn't.
+        else if (about.some((x) => x.intent?.verdict === "mistake" && SERVER_ONLY.test(x.intent.reasons[0] ?? ""))) entry[verb] = "server";
         else if (about.some((x) => x.intent?.verdict === "on purpose")) entry[verb] = now[verb];
         else if (verb === "read" && about.some((x) => /only reads users' own rows/.test(x.intent?.reasons[0] ?? ""))) entry[verb] = now.owned ? "owner" : "signed-in";
         else entry[verb] = ask(verb);
@@ -173,6 +178,11 @@ export function draftAccess(report) {
   return { access: draft, why };
 }
 
-export function describeLevel(level) {
-  return WORDS[level];
+// key: the table, "bucket:x" or "function:x" it's about. A bucket's files have owners, not rows.
+export function describeLevel(level, key = "") {
+  return key.startsWith("bucket:") ? WORDS[level].replace("row's", "file's") : WORDS[level];
+}
+
+export function describeFewer(level, key = "") {
+  return `only ${key.startsWith("bucket:") ? FEWER[level].replace("row's", "file's") : FEWER[level]}`;
 }

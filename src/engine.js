@@ -92,6 +92,8 @@ export async function runProbe({ migrations, code = [], grants = "legacy", oct30
   }
   // What rls-probe.json says each table is meant to allow, checked against what the probe saw.
   // It comes last: it's the app owner's word, over anything guessed from the code.
+  // The findings before any declaration, so the page can check new answers without probing again.
+  Object.defineProperty(report, "undeclared", { value: { findings: report.findings, accepted: report.accepted }, enumerable: false });
   const said = readAccess(parseConfig(config));
   if (Object.keys(said.entries).length || said.problems.length) {
     const { findings: checked, accepted: matching, comparison } = applyAccess(report, said.entries);

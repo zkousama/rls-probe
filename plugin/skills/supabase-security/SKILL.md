@@ -34,6 +34,11 @@ to check (no migrations, or no tables in them).
   (`{ "accept": [{ "finding": "visitor-read:products", "reason": "a public catalog" }] }`),
   so they're listed as accepted instead of counted. Ask the user before accepting anything
   that holds private data.
+- To record who each table is for, run `npx -y rls-probe@0.9.0 <app folder> --draft-access`.
+  It writes an `access` section into `rls-probe.json` (who may see, add and change each
+  table: everyone, signed-in, team, owner or server), drafted from the code, and keeps
+  what's already there. Ask the user every question it marks with "?"; never answer
+  those yourself. From then on, findings that match the answers stop counting.
 - Get the exact changes with `npx -y rls-probe@0.9.0 <app folder> --prompt`. It names
   the app's own policies and owner columns, and gives SQL that rls-probe already
   tested on a copy of the database: prefer it. The `write_supabase_security_fixes`

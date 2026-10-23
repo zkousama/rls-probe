@@ -4,6 +4,7 @@ import { INTENT, badge, explain, fixPrompt } from "../../../src/explain.js";
 import { renderGrants } from "../../../src/grants.js";
 import { chooseFiles } from "../../../src/project.js";
 import { reviewBrief } from "../../../src/review.js";
+import { declareParts, recheck } from "./declare.js";
 import { shareParts } from "./share.js";
 import { memberCan, renderText } from "../../../src/report.js";
 import { SKIP_DIRS } from "../../../src/static.js";
@@ -443,9 +444,23 @@ function show(report, project, testing) {
       el("div", {}, el("p", {}, n.headline), ...said(n), el("details", { className: "mt-1.5" }, el("summary", {}, "If it isn't on purpose"), el("p", { className: "ask" }, n.ask), slot(n))),
     ))), ...(e.problems.length ? [] : hire)));
   }
+  // What each table is meant to allow: drafted from the code, answered here, checked at once.
+  if (report.results.length) {
+    sections.push(section("What each table is for",
+      "rls-probe drafted who may see, add and change each table from your code. Answer what it couldn't tell, then check: findings that match your answers stop counting, and anything that allows more than you said stays a problem.",
+      ...(e.access ? [el("p", { className: "mb-4 font-semibold" }, e.access.headline.replace(/^rls-probe\.json declares /, "Your answers set "))] : []),
+      ...declareParts(report, project, el, {
+        check: (entries, file) => show(recheck(report, entries), { ...project, config: file }, new Set()),
+        download: (name, text) => {
+          const a = el("a", { href: URL.createObjectURL(new Blob([text], { type: "application/json" })), download: name });
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+        },
+      })));
+  }
   if (e.accepted.length || e.acceptNotes.length) {
-    sections.push(section("Accepted by you", "Listed in your rls-probe.json with a reason, so they don't count toward the grade.",
-      el("ul", { className: "grid gap-2" }, ...e.accepted.map((a) => el("li", {}, el("span", { className: "font-semibold" }, a.headline), " ", el("span", { className: "text-muted" }, `Your reason: ${a.reason} (${a.id})`))),
+    sections.push(section("Accepted by you", e.accepted.some((a) => a.declared) ? "Listed in your rls-probe.json, or within what it says each table is for, so they don't count toward the grade." : "Listed in your rls-probe.json with a reason, so they don't count toward the grade.",
+      el("ul", { className: "grid gap-2" }, ...e.accepted.map((a) => el("li", {}, el("span", { className: "font-semibold" }, a.headline), " ", el("span", { className: "text-muted" }, a.declared ? `Within what rls-probe.json says: ${a.reason.replace(/^declared in rls-probe\.json: /, "")}. (${a.id})` : `Your reason: ${a.reason} (${a.id})`))),
         ...e.acceptNotes.map((n) => el("li", { className: "text-muted" }, n)))));
   }
   if (e.team) sections.push(section("Shared with teammates", null, el("p", {}, capitalize(e.team.headline.replace(/^Teammates: /, "")))));
@@ -601,6 +616,7 @@ function el(tag, props, ...children) {
   return node;
 }
 
+// The tool's own name stays lower case.
 function capitalize(text) {
-  return text.charAt(0).toUpperCase() + text.slice(1);
+  return text.startsWith("rls-probe") ? text : text.charAt(0).toUpperCase() + text.slice(1);
 }

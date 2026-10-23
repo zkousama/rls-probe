@@ -2,7 +2,7 @@
 // builder (Lovable, Bolt, Cursor, Claude) to change. Every sentence comes from the
 // report: the policy names, owner columns and grants are the app's own.
 import { findingId } from "./accept.js";
-import { describeLevel, doing } from "./access.js";
+import { describeFewer, describeLevel, doing } from "./access.js";
 import { teamReach } from "./report.js";
 
 const SEE = { read: "see", update: "change", delete: "delete", insert: "add" };
@@ -293,10 +293,10 @@ function say(f, report) {
     case "access-too-closed": {
       const act = doing([f.verb], f.where);
       return f.kind === "access-too-open"
-        ? { headline: `${capitalize(describeLevel(f.observed).replace(/,$/, ""))} can ${act}, but rls-probe.json says ${describeLevel(f.declared).replace(/,$/, "")} may.`,
-            ask: `Tighten the policies (or grants) so ${describeLevel(f.declared)} may ${act}. If it's meant to be open, change rls-probe.json instead.` }
-        : { headline: `rls-probe.json says ${describeLevel(f.declared)} may ${act}, but only ${describeLevel(f.observed).replace(/^only /, "")} can, so that part of the app may not work.`,
-            ask: `Add the policy (and grant) that lets ${describeLevel(f.declared).replace(/,$/, "")} ${act}, or correct rls-probe.json.` };
+        ? { headline: `${capitalize(describeLevel(f.observed, f.where).replace(/,$/, ""))} can ${act}, but rls-probe.json says ${describeLevel(f.declared, f.where).replace(/,$/, "")} may.`,
+            ask: `Tighten the policies (or grants) so ${describeLevel(f.declared, f.where)} may ${act}. If it's meant to be open, change rls-probe.json instead.` }
+        : { headline: `rls-probe.json says ${describeLevel(f.declared, f.where)} may ${act}, but ${describeFewer(f.observed, f.where)} can, so that part of the app may not work.`,
+            ask: `Add the policy (and grant) that lets ${describeLevel(f.declared, f.where).replace(/,$/, "")} ${act}, or correct rls-probe.json.` };
     }
     case "public-bucket":
       return {
@@ -399,8 +399,9 @@ function serviceRoleHint(policies, actions, role) {
   return { text: meant.length === atFault.length ? text : `${text} `, all: meant.length === atFault.length };
 }
 
+// The tool's own name stays lower case.
 function capitalize(text) {
-  return text.charAt(0).toUpperCase() + text.slice(1);
+  return text.startsWith("rls-probe") ? text : text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 function human(column) {

@@ -581,7 +581,18 @@ test("--draft-access answers what the code shows and asks the rest, keeping exis
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rls-probe-draft-"));
   fs.cpSync(fileURLToPath(new URL("./fixtures/intent", import.meta.url)), dir, { recursive: true });
   fs.writeFileSync(path.join(dir, "rls-probe.json"), JSON.stringify({ accept: [{ finding: "x:y", reason: "kept" }], access: { posts: { read: "everyone" } } }));
-  const draft = JSON.parse(execFileSync("node", [cli, dir, "--draft-access"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
+  // A shared table no code uses, which any signed-in user may read and change: only the
+  // change is a finding, so only the change is drafted as server-only.
+  fs.writeFileSync(path.join(dir, "supabase/migrations/20250102000000_labels.sql"), `create table public.labels (id bigint generated always as identity primary key, name text not null);
+alter table public.labels enable row level security;
+create policy "read labels" on public.labels for select to authenticated using (true);
+create policy "edit labels" on public.labels for update to authenticated using (true);
+insert into public.labels (name) values ('a'), ('b');
+`);
+  // Written in place: `> rls-probe.json` would empty the file before it was read.
+  const out = execFileSync("node", [cli, dir, "--draft-access"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  assert.match(out, /Wrote \S*rls-probe\.json: 6 tables, 0 questions for you\./);
+  const draft = JSON.parse(fs.readFileSync(path.join(dir, "rls-probe.json"), "utf8"));
   assert.deepEqual(draft.accept, [{ finding: "x:y", reason: "kept" }], "the rest of the file stays");
   assert.deepEqual(draft.access.waitlist, { read: "server", add: "server", change: "server" }, "only the service role reaches it");
   assert.deepEqual(draft.access.legacy_stats, { read: "server", add: "server", change: "server" }, "only plain SQL from the server reaches it");
@@ -589,6 +600,10 @@ test("--draft-access answers what the code shows and asks the rest, keeping exis
   assert.equal(draft.access.contact_messages.add, "everyone", "the policy says anyone can submit");
   assert.equal(draft.access.posts.read, "everyone", "an answer already given stays as it is");
   assert.ok(draft.access.posts.add && draft.access.posts.change, "and the rest of that table is drafted around it");
+  assert.deepEqual(draft.access.labels, { read: "signed-in", add: "server", change: "server" }, "a draft never says less than the database allows where nothing was found");
+  // Checked against the file, only the answer given adds a finding (posts are read by signed-in
+  // users only, not everyone); nothing drafted does.
+  assert.deepEqual(run(dir).report.findings.filter((f) => f.kind.startsWith("access-")).map((f) => `${f.kind} ${f.where} ${f.verb}`), ["access-too-closed posts read"]);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -597,7 +612,7 @@ test("declared access: what matches is accepted, what allows more stays a proble
   fs.cpSync(fileURLToPath(new URL("./fixtures/intent", import.meta.url)), dir, { recursive: true });
   fs.writeFileSync(path.join(dir, "rls-probe.json"), JSON.stringify({ access: {
     posts: { read: "signed-in", add: "signed-in" },
-    notes: { read: "owner" },
+    notes: { read: "owner", add: "owner" },
     contact_messages: { add: "everyone" },
     legacy_stats: { read: "server", add: "server", change: "server" },
     waitlist: { read: "nobody", change: "? who" },
@@ -611,6 +626,8 @@ test("declared access: what matches is accepted, what allows more stays a proble
   assert.match(notes.intent.reasons[0], /rls-probe\.json says only the row's owner may see rows in notes/);
   const stats = report.findings.find((f) => f.where === "legacy_stats");
   assert.match(stats.intent.reasons[0], /only your server code may see, add, change or delete rows in legacy_stats/);
+  // Adding means adding one's own rows, so "owner" there is the same as any signed-in user.
+  assert.ok(!report.findings.some((f) => f.kind === "access-too-open" && f.where === "notes"), "owners adding their own notes is what was declared");
   const closed = report.findings.find((f) => f.kind === "access-too-closed");
   assert.deepEqual([closed.where, closed.verb, closed.declared, closed.observed, closed.severity], ["posts", "add", "signed-in", "server", "review"]);
   assert.ok(report.access.problems.some((p) => /waitlist" read is "nobody"/.test(p)), "a level that doesn't exist is pointed out");

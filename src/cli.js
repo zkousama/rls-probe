@@ -39,7 +39,7 @@ const oct30 = args.includes("--oct30") || fix;
 // ones that work; --fix-policies writes those as a new migration. The prompt for AI
 // builders includes them.
 const fixPolicies = args.includes("--fix-policies");
-// --draft-access prints rls-probe.json with an "access" section drafted from the app's code:
+// --draft-access writes rls-probe.json with an "access" section drafted from the app's code:
 // answers where the code shows what a table is for, questions ("? ...") where only you can say.
 const draft = args.includes("--draft-access");
 const testFixes = args.includes("--test-fixes") || fixPolicies || format === "prompt" || format === "review";
@@ -102,8 +102,8 @@ const sarif = () => JSON.stringify(toSarif(report, {
 }), null, 2);
 const markdown = () => renderMarkdown(report, details()) + (wrote ? `\n${wrote}\n` : "");
 if (draft) {
-  // Answers already in rls-probe.json stay; drafts fill in the rest. The reasons go to stderr,
-  // so `--draft-access > rls-probe.json` writes only the file.
+  // Answers already in rls-probe.json stay; drafts fill in the rest. The file is written in
+  // place, since `--draft-access > rls-probe.json` would empty it before it was read.
   let current = {};
   try {
     current = config ? JSON.parse(config) : {};
@@ -114,10 +114,15 @@ if (draft) {
   // Verb by verb: an answer given wins, the gaps around it are drafted.
   const names = new Set([...Object.keys(access), ...Object.keys(current.access ?? {})]);
   const merged = { ...current, access: Object.fromEntries([...names].sort().map((n) => [n, { ...access[n], ...current.access?.[n] }])) };
-  console.log(JSON.stringify(merged, null, 2));
-  const questions = Object.entries(merged.access).filter(([, v]) => Object.values(v).some((x) => String(x).startsWith("?")));
-  console.error(`Drafted ${Object.keys(access).length} entries; ${questions.length} ${questions.length === 1 ? "needs" : "need"} your answer (they start with "?").`);
-  for (const [name, reason] of Object.entries(why)) console.error(`  ${name}: ${reason}`);
+  fs.writeFileSync(configFile, `${JSON.stringify(merged, null, 2)}\n`);
+  const all = Object.keys(merged.access);
+  const count = (n, word) => (n ? `${n} ${word}${n === 1 ? "" : "s"}` : null);
+  const what = [count(all.filter((n) => !n.includes(":")).length, "table"), count(all.filter((n) => n.startsWith("bucket:")).length, "bucket"), count(all.filter((n) => n.startsWith("function:")).length, "function")].filter(Boolean);
+  const q = Object.values(merged.access).flatMap(Object.values).filter((x) => String(x).startsWith("?")).length;
+  console.log(`Wrote ${path.relative(process.cwd(), configFile)}: ${what.length > 1 ? `${what.slice(0, -1).join(", ")} and ${what.at(-1)}` : what[0] ?? "nothing to declare"}, ${q} question${q === 1 ? "" : "s"} for you${q ? ' (marked "?")' : ""}.`);
+  console.log(q ? `Answer ${q === 1 ? "it" : "them"}, then run rls-probe again to check the database against your answers.` : "Run rls-probe again to check the database against it.");
+  if (Object.keys(why).length) console.log("\nWhat the code shows:");
+  for (const [name, reason] of Object.entries(why)) console.log(`  ${name}: ${reason}`);
 }
 else if (format === "json") console.log(JSON.stringify(report, null, 2));
 else if (format === "prompt") process.stdout.write(fixPrompt(report));

@@ -183,8 +183,9 @@ function q(identifier) {
   return `"${identifier.replace(/"/g, '""')}"`;
 }
 
+// The tool's own name stays lower case.
 function cap(text) {
-  return text.charAt(0).toUpperCase() + text.slice(1);
+  return text.startsWith("rls-probe") ? text : text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 function list(words) {

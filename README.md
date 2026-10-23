@@ -103,6 +103,44 @@ by a comment. Only an explicit "on purpose" lowers a finding to "worth a look", 
 app treating rows as each user's own raises a read to high. With a pasted schema and no
 code, only the migrations' own words count.
 
+### Say what each table is for
+
+Where the code can't settle it, you can. Write down who may see, add and change each
+table, bucket and function in `rls-probe.json`, and every inspection checks the
+database against it:
+
+```json
+{
+  "access": {
+    "posts":            { "read": "everyone", "add": "signed-in", "change": "owner" },
+    "contact_messages": { "read": "server",   "add": "everyone",  "change": "server" },
+    "bucket:avatars":   { "read": "everyone", "add": "signed-in", "change": "owner" },
+    "function:delete_order": { "call": "server" }
+  }
+}
+```
+
+Levels, most open first: `everyone` (visitors too), `signed-in`, `team` (members of
+the same group), `owner` (the row's own user) and `server` (only server code, with the
+service role). A finding that stays within what you wrote stops counting. One that
+allows more stays a problem and says what you declared. Where the database allows less
+than you wrote, rls-probe points it out, since that part of the app may not work.
+Adding rows in someone else's name is never covered by a declaration.
+
+You don't have to write it from scratch:
+
+```sh
+npx rls-probe path/to/your-app --draft-access
+```
+
+writes it, next to your supabase folder, from the same evidence as the verdicts above:
+a table only reached with plain SQL from server code becomes `server`, one only ever
+read with the user's own id becomes `owner`. Where only you can say, it leaves a
+question: `"read": "? everyone | signed-in | team | owner | server (now: signed-in)"`.
+Whatever is already in the file is kept, answers and accepted findings alike. On the
+web page the same questions take one click each, with a button to check the answers at
+once and one to download the file.
+
 ### With an agent that reads your code
 
 rls-probe sees the database your migrations build. An agent like Claude Code, Cursor
@@ -190,6 +228,7 @@ migration) and `write_supabase_grants_migration` (the `--fix` migration).
 | `--sarif` | SARIF, for GitHub code scanning |
 | `--json` | Everything, for scripts |
 | `--badge` | A README badge with the grade, linking to the web page |
+| `--draft-access` | Writes `rls-probe.json` with a drafted `access` section, questions marked `?` |
 
 `--markdown-file=<path>` and `--sarif-file=<path>` write those formats as well,
 in the same run. `--test-fixes` adds the tested fixes to any format (`--prompt` and
