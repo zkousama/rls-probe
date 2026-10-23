@@ -1,6 +1,8 @@
 // Checks rls-probe against a real local Supabase. Run `supabase start` in a folder
 // holding test/fixtures/leaky/supabase, then: node scripts/compare-with-supabase.mjs <that folder>
 // It signs up two real users, repeats every probe over the REST API, and prints where the two disagree.
+// The folder may hold more migrations, such as the one --fix-policies writes: the probe runs on the
+// same folder, and the owner's own access (user A) is compared too.
 import { execSync, execFileSync } from "node:child_process";
 
 const V = process.argv[2];
@@ -53,8 +55,8 @@ for (const table of Object.keys(owner)) {
   const ownerCol = owner[table];
   const aRow = ownerCol ? rowsOf[table].find((r) => r[ownerCol] === users.A.id) : rowsOf[table][0];
   results[table] = {};
-  for (const who of ["anon", "B"]) {
-    const token = who === "anon" ? ANON : users.B.token;
+  for (const who of ["anon", "B", "A"]) {
+    const token = who === "anon" ? ANON : users[who].token;
     const read = await call("GET", `/rest/v1/${table}?select=*`, { token });
     const visible = Array.isArray(read.data) ? read.data : [];
     const readA = ownerCol ? visible.filter((r) => r[ownerCol] === users.A.id).length : visible.filter((r) => rowsOf[table].some((s) => s[pk[table]] === r[pk[table]])).length;
@@ -78,13 +80,13 @@ for (const table of Object.keys(owner)) {
 }
 
 const probe = JSON.parse((() => {
-  try { return execFileSync("node", [new URL("../src/cli.js", import.meta.url).pathname, new URL("../test/fixtures/leaky", import.meta.url).pathname, "--json"], { encoding: "utf8" }); }
+  try { return execFileSync("node", [new URL("../src/cli.js", import.meta.url).pathname, V, "--json"], { encoding: "utf8" }); }
   catch (e) { return e.stdout; }
 })());
 let mismatches = 0;
 console.log("table       who   field   rest-api  rls-probe");
 for (const r of probe.results) {
-  for (const who of ["anon", "B"]) {
+  for (const who of ["anon", "B", "A"]) {
     for (const field of ["read", "update", "delete", "insert"]) {
       if (r.table === "profiles" && field === "insert") continue;
       const real = results[r.table][who][field];

@@ -63,12 +63,15 @@ import Diagram from "../components/Diagram.astro";
         </div>
 
         <figure class="justify-self-center lg:justify-self-end lg:pt-3">
-          <div class="placard placard-lg grade-F -rotate-2" aria-hidden="true">
+          <div id="hero-card" class="placard placard-lg grade-F -rotate-2" aria-hidden="true">
             <span class="p-title">Database inspection</span>
             <span class="p-letter">F</span>
             <span class="p-sub">Orders open to anyone</span>
           </div>
-          <figcaption class="mt-5 max-w-[30ch] text-[0.9rem] text-muted">Every inspection ends with a grade, from A to F, and a list of what to fix.</figcaption>
+          <div id="hero-scale" class="grade-scale" role="group" aria-label="Show a grade">
+            {["F", "D", "C", "B", "A"].map((g, i) => <button type="button" class={`g-${g}`} aria-pressed={i === 0 ? "true" : "false"} aria-label={`Grade ${g}`}>{g}</button>)}
+          </div>
+          <figcaption class="mt-4 max-w-[30ch] text-[0.9rem] text-muted">Every inspection ends with a grade, from A to F, and a list of what to fix. Fix it, inspect again, and watch the grade climb.</figcaption>
         </figure>
       </section>
 
@@ -124,7 +127,7 @@ import Diagram from "../components/Diagram.astro";
         </div>
         <div>
           <h3 class="font-bold">Does it agree with a real Supabase?</h3>
-          <p class="mt-1.5 text-muted">It's tested against one. On a 15-table app built with Lovable, all 100 checks matched a real local Supabase.</p>
+          <p class="mt-1.5 text-muted">It's tested against one. On a 15-table app built with Lovable, all 100 checks matched a real local Supabase. The fixes it suggests, the functions it calls and the teammate it adds were checked the same way: 136 of 136 matched.</p>
         </div>
       </section>
 
@@ -143,17 +146,17 @@ import Diagram from "../components/Diagram.astro";
         <div class="mt-8 grid gap-8 md:grid-cols-3">
           <div class="min-w-0">
             <h3 class="font-bold">Command line</h3>
-            <pre class="codebox">npx rls-probe .</pre>
+            <div class="copyable"><pre class="codebox">npx rls-probe .</pre><button type="button" class="corner-copy" data-copy="npx rls-probe .">Copy</button></div>
             <p class="text-[0.95rem] text-muted">Add <code>--prompt</code> for an AI builder, <code>--fix-policies</code> to write the tested fixes, <code>--fix</code> for the October 30 grants.</p>
           </div>
           <div class="min-w-0">
             <h3 class="font-bold">GitHub Action</h3>
-            <pre class="codebox">- uses: zkousama/rls-probe@v0</pre>
+            <div class="copyable"><pre class="codebox">- uses: zkousama/rls-probe@v0</pre><button type="button" class="corner-copy" data-copy="- uses: zkousama/rls-probe@v0">Copy</button></div>
             <p class="text-[0.95rem] text-muted">Fails the build when a migration opens data.</p>
           </div>
           <div class="min-w-0">
             <h3 class="font-bold">Claude Code and MCP</h3>
-            <pre class="codebox">/plugin install rls-probe --marketplace zkousama/rls-probe</pre>
+            <div class="copyable"><pre class="codebox">/plugin install rls-probe {"\u2011\u2011marketplace"} zkousama/rls-probe</pre><button type="button" class="corner-copy" data-copy="/plugin install rls-probe --marketplace zkousama/rls-probe">Copy</button></div>
             <p class="text-[0.95rem] text-muted">Or <code>npx rls-probe mcp</code> in Cursor, Windsurf or Claude Desktop.</p>
           </div>
         </div>
@@ -161,6 +164,7 @@ import Diagram from "../components/Diagram.astro";
 
     <script>
       import "../scripts/app.js";
+      import "../scripts/hero.js";
     </script>
 </Base>
 

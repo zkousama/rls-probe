@@ -120,7 +120,7 @@ In Cursor, Windsurf, Claude Desktop or any other MCP client, add the server:
 ```json
 {
   "mcpServers": {
-    "rls-probe": { "command": "npx", "args": ["-y", "rls-probe@0.7.0", "mcp"] }
+    "rls-probe": { "command": "npx", "args": ["-y", "rls-probe@0.7.1", "mcp"] }
   }
 }
 ```
@@ -143,7 +143,9 @@ migration) and `write_supabase_grants_migration` (the `--fix` migration).
 `--markdown-file=<path>` and `--sarif-file=<path>` write those formats as well,
 in the same run. `--test-fixes` adds the tested fixes to any format (`--prompt` and
 `--fix-policies` always test them); it takes one more probe of the database, or a few
-when a fix has to be tried on its own.
+when a fix has to be tried on its own. `--fix-time=<seconds>` caps how long that may
+take (180 by default; the MCP server uses 25, since many MCP clients stop waiting after
+a minute). Fixes not tried in time are marked untested and never offered.
 
 If some tables were made in the Supabase dashboard rather than in migrations,
 check the live schema instead: `supabase db dump -f schema.sql`, then
@@ -284,7 +286,22 @@ steps:
 
 `scripts/compare-with-supabase.mjs` starts from a real local Supabase running the
 same migrations, signs up two real users, repeats every check over the REST API
-and compares. On the test app in `test/fixtures/leaky` all 38 checks agree.
+and compares, for the visitor, the second user and the owner. On the test app in
+`test/fixtures/leaky` all 57 checks agree, and all 57 agree again with the
+migration `--fix-policies` writes for it applied: the visitor and the second user
+are shut out, and the owner keeps reading, editing, deleting and adding their rows.
+
+`scripts/compare-functions-with-supabase.mjs` calls each function the probe called,
+through `/rest/v1/rpc`, as a visitor and as the second user, aimed at the first
+user's rows, and compares what happened to them: 10 of 10 checks agree on
+`test/fixtures/leaky` and `test/fixtures/functions` (a visitor deletes the order,
+a profile comes back with its email, a counter moves, a function that checks the
+caller changes nothing).
+
+`scripts/compare-teams-with-supabase.mjs` puts three real users in two
+organizations, checks what a teammate and an outsider can do to a task, applies the
+fix rls-probe tested for it to the real database and checks again: 12 of 12 agree,
+and after the fix the outsider is out while the teammate still reads and edits it.
 
 `scripts/compare-grants-with-supabase.mjs` does the same for the grants change,
 on a local Supabase opted in with the SQL from Supabase's changelog: every table

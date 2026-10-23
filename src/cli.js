@@ -36,6 +36,9 @@ const oct30 = args.includes("--oct30") || fix;
 // builders includes them.
 const fixPolicies = args.includes("--fix-policies");
 const testFixes = args.includes("--test-fixes") || fixPolicies || format === "prompt";
+// --fix-time=<seconds>: how long testing fixes may take (three minutes unless set). On a
+// very large app, the fixes not tried by then are left out, marked untested.
+const fixTime = Number(args.find((a) => a.startsWith("--fix-time="))?.slice(11)) || 180;
 const VERSION = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 const target = path.resolve(args.find((a) => !a.startsWith("--")) ?? ".");
 // Extra copies in other formats, written in the same run (the GitHub Action uses both).
@@ -55,9 +58,7 @@ const snapshot = await baseSnapshot();
 const explicitGrants = oct30 && grants === "legacy" ? grantsInBackground(migrations, snapshot) : null;
 const probed = await runProbe({ migrations, code: readCodeFiles(target), grants, oct30, snapshot, explicitGrants, keep: testFixes });
 const report = { target, ...probed };
-// Three minutes at most: on a very large app, fixes not tried by then are left out,
-// marked untested.
-if (testFixes) report.fixes = await verifyFixes({ migrations, report, snapshot, migrated: probed.migrated, deadline: performance.now() + 180_000 });
+if (testFixes) report.fixes = await verifyFixes({ migrations, report, snapshot, migrated: probed.migrated, deadline: performance.now() + fixTime * 1000 });
 // Supabase keys migrations by their timestamp, so two written in one run are a second apart.
 const now = Date.now();
 const writeMigration = (name, sql, order) => {

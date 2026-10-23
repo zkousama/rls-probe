@@ -114,7 +114,8 @@
   .placard .p-title { font-size: 0.8rem; font-weight: 700; font-stretch: 112%; letter-spacing: 0.01em; }
   .placard .p-letter { font-size: 6.5rem; line-height: 0.95; font-weight: 900; font-stretch: 125%; }
   .placard .p-sub { font-size: 0.75rem; color: #5b6372; }
-  .placard-lg { padding: 20px 28px 16px; }
+  .placard-lg { padding: 20px 28px 16px; width: 19rem; max-width: calc(100vw - 32px); }
+  .placard-lg .p-sub { text-wrap: balance; }
   .placard-lg .p-title { font-size: 0.95rem; }
   .placard-lg .p-letter { font-size: clamp(7rem, 13vw, 10.5rem); }
   .placard-lg .p-sub { font-size: 0.85rem; }
@@ -124,6 +125,16 @@
   .placard.grade-D { --grade: var(--grade-d); }
   .placard.grade-F { --grade: var(--grade-f); }
   .placard.grade-none { --grade: #5b6372; }
+
+  /* The scale under the grade card: each grade in its colour, the one on show filled. */
+  .grade-scale { display: flex; gap: 6px; margin-top: 18px; }
+  .grade-scale button { --g: var(--grade-a); width: 2rem; height: 2rem; border: 2px solid var(--g); border-radius: 4px; color: var(--g); background: var(--card); font-weight: 800; font-stretch: 115%; cursor: pointer; transition: transform 0.15s; }
+  .grade-scale button:hover { transform: translateY(-2px); }
+  .grade-scale button[aria-pressed="true"] { background: var(--g); color: var(--card); }
+  .grade-scale .g-B { --g: var(--grade-b); }
+  .grade-scale .g-C { --g: var(--grade-c); }
+  .grade-scale .g-D { --g: var(--grade-d); }
+  .grade-scale .g-F { --g: var(--grade-f); }
   .placard.stamp { animation: stamp 0.32s cubic-bezier(0.2, 0.9, 0.3, 1.2) both; }
   @keyframes stamp {
     from { transform: scale(1.35) rotate(-7deg); opacity: 0; }
@@ -193,6 +204,12 @@
   .theme-toggle svg { width: 1.1rem; height: 1.1rem; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   .theme-toggle .sun, :root[data-theme="dark"] .theme-toggle .moon, :root:not([data-theme]) .theme-toggle { display: none; }
   :root[data-theme="dark"] .theme-toggle .sun { display: block; }
+
+  /* A code box with a copy button in its corner. */
+  .copyable { position: relative; }
+  .copyable .codebox { white-space: pre-wrap; overflow-wrap: anywhere; padding-right: 4.75rem; }
+  .corner-copy { position: absolute; top: 8px; right: 8px; padding: 3px 10px; border: 1px solid var(--color-rule); border-radius: 4px; background: var(--color-surface); color: var(--color-ink); font-size: 0.8rem; font-weight: 700; cursor: pointer; }
+  .corner-copy:hover { border-color: var(--color-ink); }
 
   .codebox { margin: 12px 0; padding: 14px 16px; background: var(--color-paper); border: 1px solid var(--color-rule); border-radius: 4px; overflow-x: auto; font-family: var(--font-mono); font-size: 0.82rem; line-height: 1.55; white-space: pre; }
 

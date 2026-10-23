@@ -53,6 +53,17 @@ $("pane-github").addEventListener("submit", (e) => {
   const url = $("repo").value;
   inspect(() => fromGitHub(url));
 });
+// A shared link (…/rls-probe/#repo=github.com/owner/app) runs that inspection; after one,
+// the address becomes such a link, so it can be passed on.
+const shared = new URLSearchParams(location.hash.slice(1)).get("repo");
+if (shared) {
+  $("repo").value = `https://${shared.replace(/^https?:\/\//, "")}`;
+  // After this module has finished loading: the inspection needs all of it.
+  queueMicrotask(() => $("pane-github").requestSubmit());
+}
+for (const button of document.querySelectorAll("[data-copy]")) {
+  button.addEventListener("click", () => copy(button.dataset.copy, button, "Copy"));
+}
 $("example").addEventListener("click", () => {
   $("repo").value = SAMPLE;
   $("pane-github").requestSubmit();
@@ -117,6 +128,7 @@ async function fromGitHub(input) {
       },
     }));
   const project = await fromEntries(entries, `github.com/${owner}/${repo}${dir ? `/${dir}` : ""}`, false);
+  history.replaceState(null, "", `#repo=github.com/${owner}/${repo}${branch || dir ? `/tree/${ref}${dir ? `/${dir}` : ""}` : ""}`);
   if (tree.truncated) project.note = "The repository is very large, so GitHub listed only part of it.";
   return project;
 }
@@ -223,6 +235,8 @@ const STEPS = [
 
 async function inspect(source) {
   again = () => inspect(source);
+  // A shared link names a GitHub inspection only; fromGitHub sets it again.
+  history.replaceState(null, "", location.pathname + location.search);
   for (const b of document.querySelectorAll("main button")) b.disabled = true;
   $("error").hidden = true;
   $("result").hidden = true;
@@ -514,21 +528,22 @@ function section(title, lead, ...body) {
 // text: the text, or a function that gives it when the button is pressed.
 function copyButton(label, text, className) {
   const button = el("button", { type: "button", className }, label);
-  button.addEventListener("click", async () => {
-    const value = typeof text === "function" ? text() : text;
-    try {
-      await navigator.clipboard.writeText(value);
-    } catch {
-      const area = el("textarea", {}, value);
-      document.body.append(area);
-      area.select();
-      document.execCommand("copy");
-      area.remove();
-    }
-    button.textContent = "Copied";
-    setTimeout(() => (button.textContent = label), 2000);
-  });
+  button.addEventListener("click", () => copy(typeof text === "function" ? text() : text, button, label));
   return button;
+}
+
+async function copy(value, button, label) {
+  try {
+    await navigator.clipboard.writeText(value);
+  } catch {
+    const area = el("textarea", {}, value);
+    document.body.append(area);
+    area.select();
+    document.execCommand("copy");
+    area.remove();
+  }
+  button.textContent = "Copied";
+  setTimeout(() => (button.textContent = label), 2000);
 }
 
 // Elements are built with text nodes only: names from the repository never become HTML.

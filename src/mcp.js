@@ -13,6 +13,9 @@ import { renderText } from "./report.js";
 const VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07"];
 const CLI = fileURLToPath(new URL("./cli.js", import.meta.url));
 const VERSION = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
+// Many MCP clients give up on a tool call after about a minute, so fixes get 25 seconds
+// of testing; on a very large app the rest are listed as untested.
+const FIX_TIME = "--fix-time=25";
 
 const PATH = {
   type: "string",
@@ -92,7 +95,7 @@ async function handle({ method, params }) {
 
 async function call(name, { path: target = "." }) {
   if (name === "check_supabase_security") {
-    const run = await probe(target, ["--oct30", "--test-fixes", "--json"]);
+    const run = await probe(target, ["--oct30", "--test-fixes", FIX_TIME, "--json"]);
     if (!run.report) return failed(run);
     const r = run.report;
     const e = explain(r);
@@ -115,7 +118,7 @@ async function call(name, { path: target = "." }) {
     return { content: [{ type: "text", text }], structuredContent: { grade: e.grade, verdict: e.verdict, exitCode: run.code, problems: e.problems, notes: e.notes }, isError: false };
   }
   if (name === "write_supabase_security_fixes") {
-    const run = await probe(target, ["--fix-policies", "--json"]);
+    const run = await probe(target, ["--fix-policies", FIX_TIME, "--json"]);
     if (!run.report) return failed(run);
     const file = run.report.policyFixWritten;
     const problems = run.report.findings.filter((f) => f.severity !== "review").length;
