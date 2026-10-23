@@ -573,3 +573,48 @@ test("the app's code and migrations say what each finding was meant to be", () =
   const schema = run(path.join(fileURLToPath(new URL("./fixtures/intent", import.meta.url)), "supabase", "migrations", "20250101000000_app.sql")).report;
   assert.ok(schema.findings.filter((f) => f.where !== "contact_messages").every((f) => !f.intent));
 });
+
+// Step 2: rls-probe.json declares who may see, add and change rows in each table. rls-probe
+// drafts it from the app's code, asks only what the code can't tell, and then checks the
+// database against it.
+test("--draft-access answers what the code shows and asks the rest, keeping existing answers", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rls-probe-draft-"));
+  fs.cpSync(fileURLToPath(new URL("./fixtures/intent", import.meta.url)), dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "rls-probe.json"), JSON.stringify({ accept: [{ finding: "x:y", reason: "kept" }], access: { posts: { read: "everyone" } } }));
+  const draft = JSON.parse(execFileSync("node", [cli, dir, "--draft-access"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
+  assert.deepEqual(draft.accept, [{ finding: "x:y", reason: "kept" }], "the rest of the file stays");
+  assert.deepEqual(draft.access.waitlist, { read: "server", add: "server", change: "server" }, "only the service role reaches it");
+  assert.deepEqual(draft.access.legacy_stats, { read: "server", add: "server", change: "server" }, "only plain SQL from the server reaches it");
+  assert.equal(draft.access.notes.read, "owner", "the app only reads users' own notes");
+  assert.equal(draft.access.contact_messages.add, "everyone", "the policy says anyone can submit");
+  assert.equal(draft.access.posts.read, "everyone", "an answer already given stays as it is");
+  assert.ok(draft.access.posts.add && draft.access.posts.change, "and the rest of that table is drafted around it");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("declared access: what matches is accepted, what allows more stays a problem, what allows less is flagged", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rls-probe-access-"));
+  fs.cpSync(fileURLToPath(new URL("./fixtures/intent", import.meta.url)), dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "rls-probe.json"), JSON.stringify({ access: {
+    posts: { read: "signed-in", add: "signed-in" },
+    notes: { read: "owner" },
+    contact_messages: { add: "everyone" },
+    legacy_stats: { read: "server", add: "server", change: "server" },
+    waitlist: { read: "nobody", change: "? who" },
+  } }));
+  const { report } = run(dir);
+  const ids = (list) => list.map((f) => `${f.kind}:${f.where}`);
+  assert.ok(ids(report.accepted).includes("user-read:posts"), "signed-in users reading posts is what was declared");
+  assert.ok(ids(report.accepted).includes("visitor-write:contact_messages"));
+  assert.match(report.accepted.find((f) => f.where === "posts").reason, /any signed-in user may see rows in posts/);
+  const notes = report.findings.find((f) => f.kind === "user-read" && f.where === "notes");
+  assert.match(notes.intent.reasons[0], /rls-probe\.json says only the row's owner may see rows in notes/);
+  const stats = report.findings.find((f) => f.where === "legacy_stats");
+  assert.match(stats.intent.reasons[0], /only your server code may see, add, change or delete rows in legacy_stats/);
+  const closed = report.findings.find((f) => f.kind === "access-too-closed");
+  assert.deepEqual([closed.where, closed.verb, closed.declared, closed.observed, closed.severity], ["posts", "add", "signed-in", "server", "review"]);
+  assert.ok(report.access.problems.some((p) => /waitlist" read is "nobody"/.test(p)), "a level that doesn't exist is pointed out");
+  assert.ok(report.access.problems.some((p) => /1 question to answer \(waitlist \(change\)\)/.test(p)));
+  assert.match(runText(dir), /rls-probe\.json declares \d+ rules for 4 tables: \d+ match, \d+ allows? more than declared, 1 allows less/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { CONFIG } from "./accept.js";
+import { draftAccess } from "./access.js";
 import { runProbe } from "./engine.js";
 import { badge, fixPrompt, renderMarkdown, renderPlain } from "./explain.js";
 import { fixesMigration, verifyFixes } from "./fixes.js";
@@ -38,6 +39,9 @@ const oct30 = args.includes("--oct30") || fix;
 // ones that work; --fix-policies writes those as a new migration. The prompt for AI
 // builders includes them.
 const fixPolicies = args.includes("--fix-policies");
+// --draft-access prints rls-probe.json with an "access" section drafted from the app's code:
+// answers where the code shows what a table is for, questions ("? ...") where only you can say.
+const draft = args.includes("--draft-access");
 const testFixes = args.includes("--test-fixes") || fixPolicies || format === "prompt" || format === "review";
 // --fix-time=<seconds>: how long testing fixes may take (three minutes unless set). On a
 // very large app, the fixes not tried by then are left out, marked untested.
@@ -97,7 +101,25 @@ const sarif = () => JSON.stringify(toSarif(report, {
   version: VERSION,
 }), null, 2);
 const markdown = () => renderMarkdown(report, details()) + (wrote ? `\n${wrote}\n` : "");
-if (format === "json") console.log(JSON.stringify(report, null, 2));
+if (draft) {
+  // Answers already in rls-probe.json stay; drafts fill in the rest. The reasons go to stderr,
+  // so `--draft-access > rls-probe.json` writes only the file.
+  let current = {};
+  try {
+    current = config ? JSON.parse(config) : {};
+  } catch {
+    current = {};
+  }
+  const { access, why } = draftAccess(report);
+  // Verb by verb: an answer given wins, the gaps around it are drafted.
+  const names = new Set([...Object.keys(access), ...Object.keys(current.access ?? {})]);
+  const merged = { ...current, access: Object.fromEntries([...names].sort().map((n) => [n, { ...access[n], ...current.access?.[n] }])) };
+  console.log(JSON.stringify(merged, null, 2));
+  const questions = Object.entries(merged.access).filter(([, v]) => Object.values(v).some((x) => String(x).startsWith("?")));
+  console.error(`Drafted ${Object.keys(access).length} entries; ${questions.length} ${questions.length === 1 ? "needs" : "need"} your answer (they start with "?").`);
+  for (const [name, reason] of Object.entries(why)) console.error(`  ${name}: ${reason}`);
+}
+else if (format === "json") console.log(JSON.stringify(report, null, 2));
 else if (format === "prompt") process.stdout.write(fixPrompt(report));
 else if (format === "review") process.stdout.write(reviewBrief(report));
 else if (format === "markdown") console.log(markdown());
@@ -115,5 +137,6 @@ const grantsTrouble = g && ((fix ? 0 : g.breaks.length + g.server.length) || g.u
 // 1: something to fix. 2: no tables, so nothing was checked (not an all clear).
 // Exiting at once would cut off a report piped to another program (jq, the MCP
 // server) at 64 KB: the exit waits until stdout has taken everything.
-const code = report.findings.some((f) => f.severity !== "review") || grantsTrouble ? 1 : report.results.length ? 0 : 2;
+// A draft is a file to fill in, not a verdict: it always exits 0.
+const code = draft ? 0 : report.findings.some((f) => f.severity !== "review") || grantsTrouble ? 1 : report.results.length ? 0 : 2;
 process.stdout.write("", () => process.exit(code));

@@ -2,6 +2,7 @@
 // builder (Lovable, Bolt, Cursor, Claude) to change. Every sentence comes from the
 // report: the policy names, owner columns and grants are the app's own.
 import { findingId } from "./accept.js";
+import { describeLevel, doing } from "./access.js";
 import { teamReach } from "./report.js";
 
 const SEE = { read: "see", update: "change", delete: "delete", insert: "add" };
@@ -22,8 +23,26 @@ export function explain(report) {
     missing: report.load.missing ?? [],
     team: teamPart(report),
     // Accepted in the app's rls-probe.json: listed with the reason, never counted.
-    accepted: (report.accepted ?? []).map((f) => ({ id: findingId(f), severity: f.severity, headline: say(f, report).headline, reason: f.reason })),
-    acceptNotes: report.acceptNotes ?? [],
+    accepted: (report.accepted ?? []).map((f) => ({ id: findingId(f), severity: f.severity, headline: say(f, report).headline, reason: f.reason, declared: Boolean(f.declared) })),
+    acceptNotes: [...(report.acceptNotes ?? []), ...(report.access?.problems ?? [])],
+    access: accessPart(report),
+  };
+}
+
+// How the database compares with what rls-probe.json declares, in one line.
+function accessPart(report) {
+  const c = report.access?.comparison;
+  if (!c?.length) return null;
+  const n = (s) => c.filter((x) => x.status === s).length;
+  const names = [...new Set(c.map((x) => x.name))];
+  const count = (prefix, word) => {
+    const n = names.filter((x) => (prefix ? x.startsWith(prefix) : !x.includes(":"))).length;
+    return n ? `${n} ${word}${n === 1 ? "" : "s"}` : null;
+  };
+  const what = [count(null, "table"), count("bucket:", "bucket"), count("function:", "function")].filter(Boolean);
+  return {
+    counts: { ok: n("ok"), open: n("too open"), closed: n("too closed") },
+    headline: `rls-probe.json declares ${c.length} rule${c.length === 1 ? "" : "s"} for ${what.length > 1 ? `${what.slice(0, -1).join(", ")} and ${what.at(-1)}` : what[0]}: ${n("ok")} match${n("too open") ? `, ${n("too open")} allow${n("too open") === 1 ? "s" : ""} more than declared` : ""}${n("too closed") ? `, ${n("too closed")} allow${n("too closed") === 1 ? "s" : ""} less (that part of the app may not work)` : ""}.`,
   };
 }
 
@@ -80,6 +99,7 @@ export function renderPlain(report) {
   }
   if (e.grants) out.push(e.grants.headline, "");
   if (e.team) out.push(e.team.headline, "");
+  if (e.access) out.push(e.access.headline, "");
   if (e.accepted.length) {
     out.push("Accepted in rls-probe.json, so not counted:");
     for (const a of e.accepted) out.push(`  - ${a.id}: ${a.reason}`);
@@ -268,6 +288,15 @@ function say(f, report) {
         "storage-user-read": [`Any signed-in user can download other users' files in the "${b}" bucket.`, `If these files are private, change ${ref(["read"], "authenticated")} so users only read their own folder: ${own}.`],
       }[f.kind];
       return { headline: says[0], ask: says[1] };
+    }
+    case "access-too-open":
+    case "access-too-closed": {
+      const act = doing([f.verb], f.where);
+      return f.kind === "access-too-open"
+        ? { headline: `${capitalize(describeLevel(f.observed).replace(/,$/, ""))} can ${act}, but rls-probe.json says ${describeLevel(f.declared).replace(/,$/, "")} may.`,
+            ask: `Tighten the policies (or grants) so ${describeLevel(f.declared)} may ${act}. If it's meant to be open, change rls-probe.json instead.` }
+        : { headline: `rls-probe.json says ${describeLevel(f.declared)} may ${act}, but only ${describeLevel(f.observed).replace(/^only /, "")} can, so that part of the app may not work.`,
+            ask: `Add the policy (and grant) that lets ${describeLevel(f.declared).replace(/,$/, "")} ${act}, or correct rls-probe.json.` };
     }
     case "public-bucket":
       return {

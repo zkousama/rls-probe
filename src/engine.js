@@ -1,6 +1,7 @@
 // The whole probe as one call, with no file or Node access: the CLI, the MCP
 // server and the web page all hand it the app's files and get the report back.
 import { applyAccept, findingId, readAccept } from "./accept.js";
+import { applyAccess, readAccess } from "./access.js";
 import { readIntent } from "./intent.js";
 import { grantsReport } from "./grants.js";
 import { loadDatabase } from "./load.js";
@@ -89,6 +90,15 @@ export async function runProbe({ migrations, code = [], grants = "legacy", oct30
     }
     report.findings.sort((a, b) => ORDER[a.severity] - ORDER[b.severity]);
   }
+  // What rls-probe.json says each table is meant to allow, checked against what the probe saw.
+  // It comes last: it's the app owner's word, over anything guessed from the code.
+  const said = readAccess(parseConfig(config));
+  if (Object.keys(said.entries).length || said.problems.length) {
+    const { findings: checked, accepted: matching, comparison } = applyAccess(report, said.entries);
+    report.findings = checked.sort((a, b) => ORDER[a.severity] - ORDER[b.severity]);
+    report.accepted = [...report.accepted, ...matching];
+    report.access = { comparison, problems: said.problems };
+  }
   if (migrated) Object.defineProperty(report, "migrated", { value: migrated, enumerable: false });
   // Roughly what trying a set of fixes costs: everything after the migrations.
   Object.defineProperty(report, "trialTime", { value: performance.now() - seeded, enumerable: false });
@@ -118,6 +128,14 @@ function locatePolicies(migrations) {
     }
   }
   return out;
+}
+
+function parseConfig(text) {
+  try {
+    return text ? JSON.parse(text) : null;
+  } catch {
+    return null; // readAccept already says the file isn't valid JSON
+  }
 }
 
 function byTable(policies) {
