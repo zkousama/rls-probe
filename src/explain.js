@@ -177,7 +177,9 @@ function say(f, report) {
     case "rls-off-users":
       return {
         headline: `${f.kind === "rls-off" ? "Anyone on the internet" : "Any signed-in user"} can ${list(acts, "and")} every row in the ${t} table${including}.`,
-        ask: `Turn on row-level security for the "${t}" table (alter table public.${t} enable row level security;) and add policies so ${owner ? `each user can only see and change their own rows (${owner})` : "only the right people can see and change it"}.`,
+        ask: result && !result.owned
+          ? `Turn on row-level security for the "${t}" table (alter table public.${t} enable row level security;). With no policies, only server code using the service role can reach it; then add a policy only for what visitors or users need${f.columns?.length ? `, never one that lets them read ${list(f.columns.map(human), "or")}` : ""}.`
+          : `Turn on row-level security for the "${t}" table (alter table public.${t} enable row level security;) and add policies so ${owner ? `each user can only see and change their own rows (${owner})` : "only the right people can see and change it"}.`,
       };
     case "visitor-write":
       return {
@@ -229,7 +231,11 @@ function say(f, report) {
             ? `${capitalize(who)} can call the database function ${f.function}() and get other users' private data back: rls-probe tried it.`
             : f.counter
               ? `${capitalize(who)} can call the database function ${f.function}(), which changes ${list(f.counter.columns.map(human), "and")} on other users' ${f.counter.table}. It looks like a counter: check that's all it does.`
-              : `The database function ${f.function}() runs with full rights, and ${who} can call it${f.writes ? " to change data" : ""}.${f.tried ? " rls-probe tried it on another user's rows and nothing changed." : ""}`,
+              : f.refusal
+                ? `The database function ${f.function}() runs with full rights and ${who} can call it, but it turned rls-probe away ("${f.refusal.slice(0, 80)}").`
+                : f.checks
+                  ? `The database function ${f.function}() runs with full rights and ${who} can call it; it checks who's calling, so it's likely fine. Worth a read to confirm.`
+                : `The database function ${f.function}() runs with full rights, and ${who} can call it${f.writes ? " to change data" : ""}.${f.tried ? " rls-probe tried it on another user's rows and nothing changed." : ""}`,
         ask: `In ${f.function}, check that the caller is allowed (with auth.uid()) before it reads or changes anything, or stop ${f.callers === "anyone" ? "visitors and users" : "users"} calling it: revoke execute on function public.${t} from public, anon, authenticated; (revoking only from anon isn't enough: Postgres lets public run every function).`,
       };
     }
@@ -281,6 +287,7 @@ function say(f, report) {
         ask: `Variables starting with VITE_, NEXT_PUBLIC_, PUBLIC_ or EXPO_PUBLIC_ are built into the website. Rename ${f.variable} without that prefix and use it only in server code.`,
       };
     case "open-function":
+      if (f.missing) return { headline: `The edge function ${f.function} accepts calls without a login, and its code isn't in the repository to check.`, ask: `Confirm that ${f.function} checks a user token or, for a webhook, the sender's signature.` };
       return f.severity === "review"
         ? { headline: `The edge function ${f.function} accepts calls without a login; its code seems to check them itself.`, ask: `Confirm that ${f.function} rejects calls without a valid user token or webhook signature.` }
         : { headline: `The edge function ${f.function} can be run by anyone on the internet.`, ask: `In the edge function ${f.function}, check who's calling before doing anything: verify the user's token, or the webhook's signature.` };

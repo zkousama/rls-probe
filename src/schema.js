@@ -94,6 +94,29 @@ export async function readFunctions(db) {
     order by p.proname`)).rows;
 }
 
+// SQL and PL/pgSQL functions in every schema that check who's calling: auth.uid(),
+// auth.jwt(), auth.role() or the request's JWT claims, directly or through such a helper
+// (private.require_user(), util.assert_company_access() and the like), up to three calls
+// deep. Returns their names, bare and schema-qualified.
+export const CHECKS_CALLER = /auth\.(uid|jwt|role)\s*\(|request\.jwt\.claim|current_setting\s*\(\s*'(request\.jwt|role)'?/i;
+export async function readGuards(db) {
+  const all = (await db.query(`
+    select n.nspname as schema, p.proname as name, pg_get_functiondef(p.oid) as body
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace join pg_language l on l.oid = p.prolang
+    where l.lanname in ('sql', 'plpgsql') and p.prokind = 'f' and n.nspname not in ('pg_catalog', 'information_schema')`)).rows;
+  const guards = new Set();
+  for (let depth = 0; depth < 3; depth++) {
+    const calls = guards.size ? new RegExp(`\\b(${[...guards].map((g) => g.replace(/\W/g, "\\$&")).join("|")})\\s*\\(`, "i") : null;
+    for (const f of all) {
+      if (CHECKS_CALLER.test(f.body) || calls?.test(f.body)) {
+        guards.add(f.name);
+        guards.add(`${f.schema}.${f.name}`);
+      }
+    }
+  }
+  return guards;
+}
+
 export async function readPolicies(db) {
   return (await db.query(`
     select tablename as table, policyname as name, cmd, roles::text[] as roles, qual, with_check as check

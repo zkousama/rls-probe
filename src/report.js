@@ -1,12 +1,17 @@
 import { findingId } from "./accept.js";
+import { CHECKS_CALLER } from "./schema.js";
 
 export const SENSITIVE = /(email|phone|address|latitude|longitude|zip_code|postal|password|token|secret|iban|ssn|birth|salary|stripe|customer_id|api_key)/i;
 export const ORDER = { critical: 0, high: 1, medium: 2, review: 3 };
+// Errors that mean "you may not": a function turning a caller away.
+const REFUSED = /permission|not authori[sz]ed|unauthori[sz]ed|denied|forbidden|not allowed|only|must be signed|sign in|log ?in|insufficient/i;
 const TALLY = /(count|views?|likes?|votes?|score|clicks?|plays?|hits?|visits?|seconds|minutes|duration|attempts|usage|streak|updated_at|last_seen|last_active|last_\w+_at)/i;
 // Tables a function writes a record to, about whoever it was called for.
 const LOG = /(^|_)(logs?|audits?|audit_log|events?|alerts?|history|activity|activities|sessions?|attempts)$/i;
 
-export function findingsFrom(results, views, functions, buckets, storage) {
+// guards: names of functions that check who's calling (schema.js readGuards).
+export function findingsFrom(results, views, functions, buckets, storage, guards = new Set()) {
+  const callsGuard = guards.size ? new RegExp(`\\b(${[...guards].map((g) => g.replace(/\W/g, "\\$&")).join("|")})\\s*\\(`, "i") : null;
   const findings = [];
   for (const r of results) {
     if (r.skipped || !r.anon) continue;
@@ -60,7 +65,8 @@ export function findingsFrom(results, views, functions, buckets, storage) {
   }
   for (const f of functions) {
     if (!f.definer || f.returns === "trigger" || !(f.anon || f.authenticated)) continue;
-    const checks = /auth\.(uid|jwt|role)\(\)/.test(f.body);
+    // It checks the caller itself, or through a helper that does.
+    const checks = CHECKS_CALLER.test(f.body) || Boolean(callsGuard?.test(f.body.replace(/^[^]*?\bas\s+\$\w*\$/i, "")));
     const writes = /\b(insert\s+into|update\s+[\w."]+\s+set|delete\s+from)\b/i.test(f.body);
     // What calling it did to user A's rows, aimed at them, as a visitor or as user B.
     // A counter going up (views, likes) or a log entry about the user is how such
@@ -79,16 +85,23 @@ export function findingsFrom(results, views, functions, buckets, storage) {
     const aimed = f.called?.length ? ` with ${f.called.join(" and ")}` : "";
     // Called, aimed at A, and nothing of A's changed or came back.
     const tried = !by && !leak && !counted && Object.values(f.calls ?? {}).some((c) => c.ok);
+    // Every call refused, saying the caller isn't allowed: the function guards itself.
+    const calls = Object.values(f.calls ?? {});
+    const refusal = calls.length && calls.every((c) => !c.ok && REFUSED.test(c.error ?? "")) ? calls[0].error : null;
+    // It turned every caller away and nothing suggests otherwise: not worth anyone's time.
+    if (refusal && !leak) continue;
     const caller = who === "anon" ? "visitors who aren't signed in" : "any signed-in user";
-    findings.push({ kind: "definer-function", function: f.name, callers: who === "anon" ? "anyone" : "users", writes, proof, leak: Boolean(leak), tried,
+    findings.push({ kind: "definer-function", function: f.name, callers: who === "anon" ? "anyone" : "users", writes, proof, leak: Boolean(leak), tried, checks,
       counter: counted ? { table: f.calls[counted].changed[0].table, columns: f.calls[counted].changed.flatMap((c) => c.columns) } : null,
-      severity: by ? (destroys ? (by === "anon" ? "critical" : "high") : by === "anon" ? "high" : "medium") : leak ? "high" : counted || checks || !writes ? "review" : "high", where: `${f.name}(${f.args})`, title: "Function runs with full rights and anyone can call it",
+      refusal, severity: by ? (destroys ? (by === "anon" ? "critical" : "high") : by === "anon" ? "high" : "medium") : leak ? "high" : counted || refusal || checks || !writes ? "review" : "high", where: `${f.name}(${f.args})`, title: "Function runs with full rights and anyone can call it",
       detail: proof
         ? `It's security definer, so it skips row-level security. Called by ${who === "anon" ? "a visitor" : "another signed-in user"}${aimed}, it ${proof.changed.map((c) => `${c.how} user A's row in ${c.table}${c.how === "changed" && c.columns.length ? ` (${c.columns.join(", ")})` : ""}`).join(", and ")}.`
         : leak
           ? `It's security definer, so it skips row-level security. Called by ${who === "anon" ? "a visitor" : "another signed-in user"}${aimed}, it returned user A's private data.`
           : counted
             ? `It's security definer, and ${caller} can call it. Called${aimed}, it only changed ${f.calls[counted].changed.flatMap((c) => c.columns).join(", ")} on user A's rows, which looks like a counter. Check that's all it's meant to do.`
+            : refusal
+            ? `It's security definer, and ${caller} can call it, but when rls-probe did, it refused: "${refusal.slice(0, 160)}". It seems to check the caller itself.`
             : `It's security definer, so it skips row-level security, and ${caller} can call it${checks ? "." : ". It never checks auth.uid()."}${writes ? "" : " It only reads, but it can still reveal data the tables would hide."}${tried ? ` rls-probe called it${aimed}, and nothing of user A's changed or came back; other arguments may still reach them.` : ""}`,
       fix: `revoke execute on function public.${f.name}(${f.args}) from public, anon, authenticated; (Postgres lets public run every function unless revoked) or check auth.uid() inside it.` });
   }

@@ -67,6 +67,16 @@ function fixFor(f, report) {
           effect: `each signed-in user sees and changes only their own rows in ${t}${ours}, and visitors see none.`,
         };
       }
+      // A table without owners that holds private columns (a waitlist's emails): only
+      // server code, with the service role, reaches it.
+      if (r && !r.owned && f.columns?.length) {
+        return {
+          sql: `alter table ${table} enable row level security;`,
+          effect: `only your server code (the service role) can read or change ${t}; the app's visitors and users can't.`,
+          // Taking everyone's access away is the point; nobody owns these rows.
+          lockdown: true,
+        };
+      }
       // A shared table, like a list of categories: everyone keeps reading it, nobody writes.
       return r && !r.owned ? {
         sql: `alter table ${table} enable row level security;\ncreate policy ${q(`rls-probe: everyone reads ${t}`.slice(0, 63))} on ${table}\n  for select to anon, authenticated\n  using (true);`,
@@ -220,7 +230,8 @@ async function tryFixes({ migrations, report, snapshot, migrated, fixes }) {
   const closes = (f) => !after.findings.some((x) => x.kind === f.kind && x.where === f.where)
     && !f.sql.split(/;$/m).filter((s) => s.trim()).some((s) => failed.some((p) => sameStatement(p, s)));
   const appeared = after.findings.filter((x) => x.severity !== "review" && !report.findings.some((y) => y.kind === x.kind && y.where === x.where));
-  return { closes, harm: [...ownerLosses(report, after), ...appeared.map((x) => ({ what: x.kind, where: x.where }))] };
+  const lockedDown = new Set(fixes.filter((f) => f.lockdown).map((f) => f.where));
+  return { closes, harm: [...ownerLosses(report, after).filter((h) => !lockedDown.has(h.where)), ...appeared.map((x) => ({ what: x.kind, where: x.where }))] };
 }
 
 // Every table and bucket where the owner (user A), or A's teammate (D, when the app

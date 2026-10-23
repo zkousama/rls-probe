@@ -146,7 +146,11 @@ export async function probeViews(db, tables) {
 // and user B try to see, replace, delete and upload into user A's folder. Buckets
 // are the ones the migrations create plus any a storage policy names, since those
 // are often made in the dashboard.
-export async function probeStorage(db) {
+// declared: buckets from supabase/config.toml, [{ id, public }], set up before probing.
+export async function probeStorage(db, declared = []) {
+  for (const b of declared) {
+    await db.query(`insert into storage.buckets (id, name, public) values ($1, $1, $2) on conflict (id) do update set public = excluded.public`, [b.id, b.public]);
+  }
   const policies = (await db.query(`select policyname as name, cmd, roles::text[] as roles, qual, with_check as check
     from pg_policies where schemaname = 'storage' and tablename = 'objects' order by policyname`)).rows;
   const rls = (await db.query(`select relrowsecurity as on from pg_class where oid = 'storage.objects'::regclass`)).rows[0].on;

@@ -5,9 +5,9 @@ import { grantsReport } from "./grants.js";
 import { loadDatabase } from "./load.js";
 import { probeFunctions, probeStorage, probeTables, probeViews } from "./probe.js";
 import { ORDER, findingsFrom } from "./report.js";
-import { readBuckets, readFunctions, readPolicies, readSchema } from "./schema.js";
+import { readBuckets, readFunctions, readGuards, readPolicies, readSchema } from "./schema.js";
 import { groupRoutes, ownerRoute, partyRoutes, seed } from "./seed.js";
-import { scanCode } from "./static.js";
+import { configBuckets, scanCode } from "./static.js";
 
 // migrations: [{ name, sql }] in the order they run. code: [{ path, text }] for the
 // code scan. snapshot: the base database (see snapshot.js, or the web page's copy).
@@ -33,15 +33,18 @@ export async function runProbe({ migrations, code = [], grants = "legacy", oct30
   const views = await probeViews(load.db, tables);
   // Storage is probed on its own terms: if a project's storage schema is too unusual
   // to probe, the tables' results still stand.
-  const storage = await probeStorage(load.db).catch((error) => ({ rls: null, buckets: [], policies: [], error: error.message }));
+  // Buckets declared in supabase/config.toml, which Supabase creates from it, not from migrations.
+  const declared = configBuckets(code.find((f) => f.path === "supabase/config.toml")?.text);
+  const storage = await probeStorage(load.db, declared).catch((error) => ({ rls: null, buckets: [], policies: [], error: error.message }));
   const functions = await readFunctions(load.db);
+  const guards = await readGuards(load.db).catch(() => new Set());
   // Calling functions is the newest probe: if it fails, the rest of the report stands.
   const calls = call ? await probeFunctions(load.db, functions, tables, known).catch(() => []) : [];
   for (const f of functions) Object.assign(f, calls.find((c) => c.name === f.name && c.args === f.args) ?? {}, { name: f.name, args: f.args });
   const buckets = await readBuckets(load.db);
   const policies = await readPolicies(load.db);
   const accept = readAccept(config);
-  const { findings, accepted, unused } = applyAccept([...findingsFrom(results, views, functions, buckets, storage), ...scanCode(code)], accept.entries);
+  const { findings, accepted, unused } = applyAccept([...findingsFrom(results, views, functions, buckets, storage, guards), ...scanCode(code)], accept.entries);
   findings.sort((a, b) => ORDER[a.severity] - ORDER[b.severity]);
 
   // How each owned table's rows lead to a user, for fixes that name the column.

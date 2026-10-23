@@ -460,3 +460,92 @@ test("keys in test files are worth a look, not critical", async () => {
   ]);
   assert.deepEqual(found.map((f) => [f.where, f.severity]), [["src/lib/__tests__/scan.test.ts:1", "review"], ["src/lib/openai.ts:1", "critical"]]);
 });
+
+// Every local Supabase prints the same keys (issuer supabase-demo, and one sb_secret_ key);
+// example and test env files are full of them, and they open nothing real.
+test("Supabase's public local development keys aren't reported as leaks", async () => {
+  const { scanCode } = await import("../src/static.js");
+  const jwt = (claims) => ["eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9", Buffer.from(JSON.stringify(claims)).toString("base64url"), "c2lnbmF0dXJlLXNpZ25hdHVyZQ"].join(".");
+  const found = scanCode([
+    { path: ".env.example", text: `SUPABASE_SERVICE_ROLE_KEY=${jwt({ iss: "supabase-demo", role: "service_role", exp: 1983812996 })}\nSUPABASE_SECRET_KEY=${["sb", "secret", "N7UND0UgjKTVK-Uodkm0Hg", "xSvEMPvz"].join("_")}` },
+    { path: "src/admin.ts", text: `const key = "${jwt({ iss: "supabase", ref: "abcdefghijklmnopqrst", role: "service_role" })}";` },
+    { path: "e2e/lib/constants.ts", text: `const k = "${["sk", "proj", "B".repeat(40)].join("-")}";` },
+  ]);
+  assert.deepEqual(found.map((f) => [f.kind, f.where, f.severity]), [["service-key", "src/admin.ts:1", "critical"], ["secret", "e2e/lib/constants.ts:1", "review"]]);
+});
+
+// A function that checks its caller through a helper (private.require_user(),
+// util.assert_company_access()) checks its caller; a bucket supabase/config.toml makes
+// public is public; an edge function whose code isn't there can't be judged.
+test("helpers that check the caller, buckets from config.toml, and missing function code", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rls-probe-helpers-"));
+  fs.mkdirSync(path.join(dir, "supabase", "migrations"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "supabase", "migrations", "20250101000000_app.sql"), `
+create schema private;
+create function private.require_user() returns uuid language plpgsql as $$
+begin
+  if auth.uid() is null then raise exception 'sign in first'; end if;
+  return auth.uid();
+end $$;
+create table public.notes (id uuid primary key default gen_random_uuid(), user_id uuid not null references auth.users (id), body text);
+alter table public.notes enable row level security;
+create policy "own notes" on public.notes for all to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
+create function public.archive_note(p_id uuid) returns void language plpgsql security definer as $$
+declare v_user uuid := private.require_user();
+begin
+  update public.notes set body = null where id = p_id and user_id = v_user;
+end $$;
+revoke execute on function public.archive_note(uuid) from public, anon;
+grant execute on function public.archive_note(uuid) to authenticated;
+create policy "anyone reads avatars" on storage.objects for select using (bucket_id = 'avatars');
+`);
+  fs.writeFileSync(path.join(dir, "supabase", "config.toml"), `[storage.buckets.avatars]\npublic = true\n\n[functions.stripe-webhook]\nverify_jwt = false\n`);
+  const { report } = run(dir);
+  const ids = report.findings.map((f) => `${f.kind}:${f.where}`);
+  assert.ok(!ids.some((id) => id.startsWith("definer-function:archive_note")), "checks its caller through private.require_user()");
+  assert.ok(!ids.includes("storage-visitor-read:storage bucket avatars"), "avatars is public in config.toml, so reading it is what public means");
+  assert.ok(ids.includes("public-bucket:storage bucket avatars"));
+  const hook = report.findings.find((f) => f.kind === "open-function");
+  assert.equal(hook.severity, "review");
+  assert.ok(hook.missing);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// What a key looks like isn't a key: another service's sk- key, a placeholder, code that
+// strips a PEM header, an example env file. A real OpenAI key and a real private key are.
+test("look-alike keys aren't reported; real ones are", async () => {
+  const { scanCode } = await import("../src/static.js");
+  const real = ["sk", "proj", "C".repeat(40)].join("-");
+  const pem = ["-----BEGIN", "PRIVATE", "KEY-----"].join(" ");
+  const found = scanCode([
+    { path: "src/keys.ts", text: [
+      `const helicone = "${["sk", "helicone", "D".repeat(40)].join("-")}";`,
+      `<input placeholder="${["sk", "or", "v1", "E".repeat(40)].join("-")}" />`,
+      `const clean = key.replace(/${pem}/g, "");`,
+      `const openai = "${real}";`,
+      `const pem = "${pem}\\n${"F".repeat(64)}";`,
+    ].join("\n") },
+    { path: ".env.example", text: `OPENAI_API_KEY=${real}` },
+  ]);
+  assert.deepEqual(found.map((f) => [f.title, f.where, f.severity]), [
+    ["OpenAI API key", "src/keys.ts:4", "critical"],
+    ["private key", "src/keys.ts:5", "critical"],
+    ["OpenAI API key", ".env.example:1", "review"],
+  ]);
+});
+
+// A waitlist has no owners and holds emails: the fix closes it to everyone but server code,
+// not "everyone reads", and its test doesn't count that as anyone losing access.
+test("a table without owners that holds private columns is fixed to server-only", async () => {
+  const { runProbe } = await import("../src/engine.js");
+  const { verifyFixes } = await import("../src/fixes.js");
+  const { baseSnapshot } = await import("../src/snapshot.js");
+  const snapshot = await baseSnapshot();
+  const migrations = [{ name: "20250101000000_waitlist.sql", sql: "create table public.waitlist (id bigint generated always as identity primary key, email text not null, created_at timestamptz default now());" }];
+  const report = await runProbe({ migrations, snapshot, keep: true });
+  const [fix] = await verifyFixes({ migrations, report, snapshot });
+  assert.equal(fix.sql, 'alter table public."waitlist" enable row level security;');
+  assert.ok(fix.verified);
+  report.fixes = [fix];
+  assert.match(explain(report).problems[0].ask, /only server code using the service role can reach it.*never one that lets them read email/);
+});

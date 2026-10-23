@@ -61,7 +61,7 @@ function evidence(f, report) {
   const stranger = "signed in as user B, who owns nothing of user A's, has no role and is in another organization";
   switch (f.kind) {
     case "rls-off":
-      return `row-level security is off on ${t}. Without signing in, it could ${acts} user A's rows${cols}.`;
+      return `row-level security is off on ${t}. Without signing in, it could ${acts} ${r?.owned ? "user A's rows" : "every row"}${cols}.`;
     case "rls-off-users":
       return `row-level security is off on ${t}, and only missing grants keep visitors out. ${cap(stranger)}, it could ${acts} user A's rows${cols}.`;
     case "visitor-write":
@@ -125,10 +125,10 @@ function check(f, report) {
     if (actions.includes("read")) steps.push(`select name from storage.objects where bucket_id = '${f.bucket.replace(/'/g, "''")}' limit 5; -- other users' files`);
     if (actions.some((a) => a !== "read")) steps.push(`-- ${list(actions.filter((a) => a !== "read").map((a) => DID[a]))}: try it from the app with storage.from("${f.bucket}") on a path under another user's id`);
   } else {
-    if (actions.includes("read")) steps.push(`select * from ${t} limit 5; -- every row here belongs to someone else`);
+    if (actions.includes("read")) steps.push(`select * from ${t} limit 5; -- ${r?.owned ? "every row here belongs to someone else" : "rows this caller can read"}`);
     if (actions.includes("update")) steps.push(`update ${t} set ${column} = ${column} returning *; -- rows this user could change`);
     if (actions.includes("delete")) steps.push(`delete from ${t} returning *; -- rows this user could delete`);
-    if (actions.includes("insert")) steps.push(`-- add: insert a row whose owner column holds another user's id; it goes in`);
+    if (actions.includes("insert")) steps.push(r?.owned ? "-- add: insert a row whose owner column holds another user's id; it goes in" : "-- add: insert any row; it goes in");
   }
   return ["begin;", ...as, ...steps, "rollback;"].join("\n");
 }
