@@ -26,29 +26,34 @@ const SECRETS = [
   { re: /\b(VITE|NEXT_PUBLIC|PUBLIC|EXPO_PUBLIC)_[A-Z0-9_]*(SERVICE_ROLE|SECRET|PRIVATE)[A-Z0-9_]*\b/g, what: "secret in a variable the build sends to the browser" },
 ];
 
+// Tests and their fixtures: a key there is usually made up for the test. It never
+// reaches a browser either, though a real one is still public in a public repository.
+const TEST_FILE = /(^|\/)(__tests__|__mocks__|tests?|spec|fixtures?|mocks?)\/|\.(test|spec)\.[cm]?[jt]sx?$/;
+
 // files: [{ path, text }], paths relative to the app's root.
 export function scanCode(files) {
   const findings = [];
   for (const { path: rel, text } of files) {
     if (rel === CONFIG || !isCodeFile(rel) || text.length > 5_000_000) continue;
     const name = rel.split("/").at(-1);
+    const test = TEST_FILE.test(rel);
     const lines = text.split("\n");
     lines.forEach((line, i) => {
       for (const jwt of line.match(/eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g) ?? []) {
         const role = jwtRole(jwt);
         if (role === "service_role") {
-          findings.push({ kind: "service-key", key: "service_role", severity: "critical", where: `${rel}:${i + 1}`, title: "Supabase service role key in the code", detail: `${mask(jwt)} skips every access rule. Anyone who opens the site can copy it.` });
+          findings.push({ kind: "service-key", key: "service_role", test, severity: test ? "review" : "critical", where: `${rel}:${i + 1}`, title: "Supabase service role key in the code", detail: `${mask(jwt)} skips every access rule. ${test ? "It's in a test file, so probably made up; if it's real, anyone who reads the repository can copy it." : "Anyone who opens the site can copy it."}` });
         }
       }
       // Supabase's newer secret keys aren't JWTs: sb_secret_ and a random string.
       for (const hit of line.match(/\bsb_secret_[A-Za-z0-9_-]{20,}/g) ?? []) {
-        findings.push({ kind: "service-key", key: "secret", severity: "critical", where: `${rel}:${i + 1}`, title: "Supabase secret key in the code", detail: `${mask(hit)} skips every access rule. Anyone who opens the site can copy it.` });
+        findings.push({ kind: "service-key", key: "secret", test, severity: test ? "review" : "critical", where: `${rel}:${i + 1}`, title: "Supabase secret key in the code", detail: `${mask(hit)} skips every access rule. ${test ? "It's in a test file, so probably made up; if it's real, anyone who reads the repository can copy it." : "Anyone who opens the site can copy it."}` });
       }
       for (const { re, what } of SECRETS) {
         for (const hit of line.match(re) ?? []) {
           if (/^\.env/.test(name) && what.startsWith("secret in a variable")) continue;
           const browserVar = what.startsWith("secret in a variable");
-          findings.push({ kind: browserVar ? "browser-secret" : "secret", ...(browserVar ? { variable: hit } : {}), severity: browserVar ? "high" : "critical", where: `${rel}:${i + 1}`, title: what, detail: mask(hit) });
+          findings.push({ kind: browserVar ? "browser-secret" : "secret", ...(browserVar ? { variable: hit } : {}), test, severity: test ? "review" : browserVar ? "high" : "critical", where: `${rel}:${i + 1}`, title: what, detail: mask(hit) });
         }
       }
     });

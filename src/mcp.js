@@ -6,9 +6,10 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
-import { explain, fixPrompt } from "./explain.js";
+import { explain } from "./explain.js";
 import { renderGrants } from "./grants.js";
 import { renderText } from "./report.js";
+import { reviewBrief } from "./review.js";
 
 const VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07"];
 const CLI = fileURLToPath(new URL("./cli.js", import.meta.url));
@@ -46,7 +47,7 @@ const TOOLS = [
   },
 ];
 
-const INSTRUCTIONS = "Use check_supabase_security after creating or changing anything in supabase/migrations, before deploying, and whenever the user asks whether their Supabase app is secure. Fix problems in new migration files, never by weakening a policy, preferring the tested SQL the check returns (or write_supabase_security_fixes), and check again until none are left. Each tested fix says what changes afterwards: tell the user when that limits a feature, such as a feed showing only the user's own posts. Items under 'worth a look' may be on purpose: ask the user before making them private.";
+const INSTRUCTIONS = "Use check_supabase_security after creating or changing anything in supabase/migrations, before deploying, and whenever the user asks whether their Supabase app is secure. rls-probe only sees the database the migrations build, so check each finding against the code before changing anything: it may already be handled, or be on purpose. Fix the real ones in new migration files, never by weakening a policy, preferring the tested SQL the check returns (or write_supabase_security_fixes). Record the ones you rule out in rls-probe.json at the app's root, each with its reason, so they stop counting. Each tested fix says what changes afterwards: tell the user when that limits a feature, such as a feed showing only the user's own posts. Ask the user before making private anything that may be public on purpose. Check again until no problems are left.";
 
 export function serve() {
   const rl = readline.createInterface({ input: process.stdin });
@@ -59,10 +60,20 @@ export function serve() {
       return send({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } });
     }
     if (message.id === undefined || message.id === null) return; // a notification
+    // A client that passes a progress token hears from a long check every few seconds,
+    // which some use to keep waiting.
+    const token = message.params?._meta?.progressToken;
+    const started = Date.now();
+    const beat = token === undefined ? null : setInterval(() => {
+      const seconds = Math.round((Date.now() - started) / 1000);
+      send({ jsonrpc: "2.0", method: "notifications/progress", params: { progressToken: token, progress: seconds, message: `Still checking (${seconds} s)` } });
+    }, 5000);
     try {
       send({ jsonrpc: "2.0", id: message.id, result: await handle(message) });
     } catch (error) {
       send({ jsonrpc: "2.0", id: message.id, error: { code: error.code ?? -32603, message: error.message } });
+    } finally {
+      clearInterval(beat);
     }
   });
   // Replies still on their way out go first.
@@ -107,9 +118,9 @@ async function call(name, { path: target = "." }) {
       e.team ? `\n${e.team.headline}` : "",
       e.missing.length ? `\nNot checked (never created by the migrations): ${e.missing.join(", ")}` : "",
       "",
-      "## What to change",
+      "## Review and fix",
       "",
-      fixPrompt(r).trimEnd(),
+      reviewBrief(r).trimEnd(),
       "",
       "## Details",
       "",

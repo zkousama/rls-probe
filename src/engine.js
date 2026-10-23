@@ -1,5 +1,6 @@
 // The whole probe as one call, with no file or Node access: the CLI, the MCP
 // server and the web page all hand it the app's files and get the report back.
+import { applyAccept, readAccept } from "./accept.js";
 import { grantsReport } from "./grants.js";
 import { loadDatabase } from "./load.js";
 import { probeFunctions, probeStorage, probeTables, probeViews } from "./probe.js";
@@ -17,13 +18,15 @@ import { scanCode } from "./static.js";
 // keep: save a copy of the database once the migrations have run, as the report's
 // `migrated` (not part of its JSON), so fixes can be tried on it without running the
 // migrations again. from: such a copy, to run `migrations` on instead. call: whether
-// to call the security definer functions (trying fixes doesn't need to).
-export async function runProbe({ migrations, code = [], grants = "legacy", oct30 = false, snapshot, explicitGrants, onProgress = () => {}, keep = false, from, call = true }) {
+// to call the security definer functions (trying fixes doesn't need to). config: the
+// text of the app's rls-probe.json, whose accepted findings don't count (see accept.js).
+export async function runProbe({ migrations, code = [], grants = "legacy", oct30 = false, snapshot, explicitGrants, onProgress = () => {}, keep = false, from, call = true, config }) {
   onProgress("migrations");
   const load = await loadDatabase(migrations, { grants, snapshot, from });
   const migrated = keep ? { dataDir: await load.db.dumpDataDir("none"), extensions: load.extensions } : null;
   const tables = await readSchema(load.db);
   onProgress("seed");
+  const seeded = performance.now();
   const { known, problems, teams } = await seed(load.db, tables);
   onProgress("probe");
   const results = await probeTables(load.db, tables, known, { teammate: teams.length > 0 });
@@ -37,7 +40,8 @@ export async function runProbe({ migrations, code = [], grants = "legacy", oct30
   for (const f of functions) Object.assign(f, calls.find((c) => c.name === f.name && c.args === f.args) ?? {}, { name: f.name, args: f.args });
   const buckets = await readBuckets(load.db);
   const policies = await readPolicies(load.db);
-  const findings = [...findingsFrom(results, views, functions, buckets, storage), ...scanCode(code)];
+  const accept = readAccept(config);
+  const { findings, accepted, unused } = applyAccept([...findingsFrom(results, views, functions, buckets, storage), ...scanCode(code)], accept.entries);
   findings.sort((a, b) => ORDER[a.severity] - ORDER[b.severity]);
 
   // How each owned table's rows lead to a user, for fixes that name the column.
@@ -61,10 +65,16 @@ export async function runProbe({ migrations, code = [], grants = "legacy", oct30
     functions: calls,
     storage: { rls: storage.rls, buckets: storage.buckets, ...(storage.error ? { error: storage.error } : {}) },
     findings,
+    // Findings the app's rls-probe.json accepts, with its reasons, and what's off in that file.
+    accepted,
+    acceptNotes: [...accept.problems, ...(unused.length ? [`rls-probe.json accepts ${unused.join(", ")}, which no longer ${unused.length === 1 ? "comes" : "come"} up. Remove ${unused.length === 1 ? "it" : "them"}.`] : [])],
     policies: { ...byTable(policies), ...(storage.policies.length ? { "storage.objects": storage.policies.map((p) => ({ name: p.name, cmd: p.cmd, roles: p.roles, using: p.qual, check: p.check })) } : {}) },
     createdAt: locate(migrations),
+    policyAt: locatePolicies(migrations),
   };
   if (migrated) Object.defineProperty(report, "migrated", { value: migrated, enumerable: false });
+  // Roughly what trying a set of fixes costs: everything after the migrations.
+  Object.defineProperty(report, "trialTime", { value: performance.now() - seeded, enumerable: false });
   if (oct30) onProgress("grants");
   if (oct30 && grants === "explicit") report.grantsChange = await grantsReport(load.db, findings);
   await load.db.close().catch(() => {});
@@ -77,6 +87,21 @@ export async function runProbe({ migrations, code = [], grants = "legacy", oct30
     }
   }
   return report;
+}
+
+// The first file and line that creates each policy, by table and name.
+function locatePolicies(migrations) {
+  const out = {};
+  const create = /\bcreate\s+policy\s+(?:"([^"]+)"|(\w+))\s+on\s+(?:"?(\w+)"?\s*\.\s*)?"?(\w+)"?/gi;
+  for (const m of migrations) {
+    m.sql.split("\n").forEach((line, i) => {
+      for (const hit of line.matchAll(create)) {
+        const table = hit[3] === "storage" ? `storage.${hit[4]}` : hit[4];
+        (out[table] ??= {})[hit[1] ?? hit[2]] ??= { file: m.name, line: i + 1 };
+      }
+    });
+  }
+  return out;
 }
 
 function byTable(policies) {

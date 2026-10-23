@@ -13,7 +13,9 @@ export function toSarif(report, { base = "", migrationsDir = "supabase/migration
   const e = explain(report);
   const said = [...e.problems, ...e.notes];
   const rules = new Map();
-  const results = report.findings.map((f) => {
+  // Findings accepted in rls-probe.json go in as suppressed, with the reason, so code
+  // scanning shows them closed rather than missing.
+  const results = [...report.findings, ...(report.accepted ?? [])].map((f) => {
     const id = `${f.kind ?? "finding"}/${f.severity}`;
     if (!rules.has(id)) {
       rules.set(id, {
@@ -30,6 +32,7 @@ export function toSarif(report, { base = "", migrationsDir = "supabase/migration
       level: LEVEL[f.severity],
       message: { text: plain ? `${plain.headline} ${plain.ask}` : `${f.title}: ${f.detail}` },
       locations: [{ physicalLocation: location(f, report, at(migrationsDir), at) }],
+      ...(f.reason ? { suppressions: [{ kind: "external", justification: f.reason }] } : {}),
     };
   });
   return {

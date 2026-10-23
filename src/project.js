@@ -33,6 +33,8 @@ export function chooseFiles(entries, { stripTop = true, maxCodeFiles = 800, maxF
     .sort((a, b) => priority(a.rel) - priority(b.rel) || a.rel.localeCompare(b.rel));
   return {
     root: top + root,
+    // The app's rls-probe.json (see accept.js), if it has one.
+    config: files.find((e) => e.rel === `${root}rls-probe.json`) ?? null,
     migrations: files.filter((e) => dirOf(e.rel) === migrationsDir && e.rel.endsWith(".sql")).sort((a, b) => a.rel.localeCompare(b.rel)),
     code: code.slice(0, maxCodeFiles),
     codeFilesFound: code.length,

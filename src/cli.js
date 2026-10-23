@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
+import { CONFIG } from "./accept.js";
 import { runProbe } from "./engine.js";
 import { badge, fixPrompt, renderMarkdown, renderPlain } from "./explain.js";
 import { fixesMigration, verifyFixes } from "./fixes.js";
 import { migrationFor, renderGrants } from "./grants.js";
 import { findMigrations, grantsInBackground, readCodeFiles, readMigrations } from "./node.js";
 import { renderText } from "./report.js";
+import { reviewBrief } from "./review.js";
 import { toSarif } from "./sarif.js";
 import { baseSnapshot } from "./snapshot.js";
 
@@ -18,8 +20,9 @@ if (process.argv[2] === "mcp") {
 
 const args = process.argv.slice(2);
 // What to print: the plain summary and the details (the default), --prompt for an
-// AI builder, --markdown, --sarif for GitHub code scanning, or --json.
-const FORMATS = ["text", "json", "prompt", "markdown", "sarif", "badge"];
+// AI builder, --review for an AI agent with the code (Claude Code, Cursor, Codex),
+// --markdown, --sarif for GitHub code scanning, or --json.
+const FORMATS = ["text", "json", "prompt", "review", "markdown", "sarif", "badge"];
 const format = args.find((a) => a.startsWith("--format="))?.slice(9) ?? FORMATS.find((f) => args.includes(`--${f}`)) ?? "text";
 if (!FORMATS.includes(format)) {
   console.error(`Unknown format "${format}". Use one of: ${FORMATS.join(", ")}.`);
@@ -35,7 +38,7 @@ const oct30 = args.includes("--oct30") || fix;
 // ones that work; --fix-policies writes those as a new migration. The prompt for AI
 // builders includes them.
 const fixPolicies = args.includes("--fix-policies");
-const testFixes = args.includes("--test-fixes") || fixPolicies || format === "prompt";
+const testFixes = args.includes("--test-fixes") || fixPolicies || format === "prompt" || format === "review";
 // --fix-time=<seconds>: how long testing fixes may take (three minutes unless set). On a
 // very large app, the fixes not tried by then are left out, marked untested.
 const fixTime = Number(args.find((a) => a.startsWith("--fix-time="))?.slice(11)) || 180;
@@ -56,9 +59,13 @@ const snapshot = await baseSnapshot();
 // --oct30 compares against a database without the old grants. When the probe runs
 // with them, that second database loads in a worker meanwhile.
 const explicitGrants = oct30 && grants === "legacy" ? grantsInBackground(migrations, snapshot) : null;
-const probed = await runProbe({ migrations, code: readCodeFiles(target), grants, oct30, snapshot, explicitGrants, keep: testFixes });
+// The app's rls-probe.json, next to its supabase folder: findings it accepts don't count.
+const appRoot = fs.statSync(target).isFile() ? path.dirname(target) : target;
+const configFile = path.join(appRoot, CONFIG);
+const config = fs.existsSync(configFile) ? fs.readFileSync(configFile, "utf8") : null;
+const probed = await runProbe({ migrations, code: readCodeFiles(target), grants, oct30, snapshot, explicitGrants, keep: testFixes, config });
 const report = { target, ...probed };
-if (testFixes) report.fixes = await verifyFixes({ migrations, report, snapshot, migrated: probed.migrated, deadline: performance.now() + fixTime * 1000 });
+if (testFixes) report.fixes = await verifyFixes({ migrations, report, snapshot, migrated: probed.migrated, trialTime: probed.trialTime, deadline: performance.now() + fixTime * 1000 });
 // Supabase keys migrations by their timestamp, so two written in one run are a second apart.
 const now = Date.now();
 const writeMigration = (name, sql, order) => {
@@ -92,6 +99,7 @@ const sarif = () => JSON.stringify(toSarif(report, {
 const markdown = () => renderMarkdown(report, details()) + (wrote ? `\n${wrote}\n` : "");
 if (format === "json") console.log(JSON.stringify(report, null, 2));
 else if (format === "prompt") process.stdout.write(fixPrompt(report));
+else if (format === "review") process.stdout.write(reviewBrief(report));
 else if (format === "markdown") console.log(markdown());
 else if (format === "sarif") console.log(sarif());
 else if (format === "badge") {

@@ -132,13 +132,22 @@ function fixFor(f, report) {
 // new problem appeared. migrated: the report's saved copy of the database (runProbe's
 // keep), so the migrations don't run again for each try. deadline: a time
 // (performance.now()) after which fixes not yet tested are left out, marked untested.
-export async function verifyFixes({ migrations, report, snapshot, migrated = report.migrated, deadline = Infinity }) {
-  return checkFixes({ migrations, report, snapshot, migrated, deadline, fixes: proposeFixes(report) });
+export async function verifyFixes({ migrations, report, snapshot, migrated = report.migrated, deadline = Infinity, trialTime = report.trialTime }) {
+  return checkFixes({ migrations, report, snapshot, migrated, deadline, trialTime, fixes: proposeFixes(report) });
 }
 
 // fixes: [{ kind, where, sql }], each meant to close the finding of that kind and place.
-export async function checkFixes({ migrations, report, snapshot, migrated = report.migrated, deadline = Infinity, fixes }) {
-  const run = (some) => (performance.now() > deadline ? null : tryFixes({ migrations, report, snapshot, migrated, fixes: some }));
+export async function checkFixes({ migrations, report, snapshot, migrated = report.migrated, deadline = Infinity, trialTime = report.trialTime, fixes }) {
+  // A try that can't finish before the deadline isn't started: its time is guessed from
+  // the probe that made the report (trialTime, in ms), then from the last try.
+  let cost = trialTime ?? 0;
+  const run = async (some) => {
+    if (performance.now() + cost > deadline) return null;
+    const started = performance.now();
+    const result = await tryFixes({ migrations, report, snapshot, migrated, fixes: some });
+    cost = performance.now() - started;
+    return result;
+  };
   const settled = new Set();
   const kept = await keep(fixes, run, (fix) => entangled(fix, report), settled);
   return fixes.map((fix) => ({ ...fix, verified: kept.includes(fix), ...(settled.has(fix) ? {} : { untested: "ran out of time" }) }));

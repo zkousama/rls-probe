@@ -3,6 +3,8 @@
 import { badge, explain, fixPrompt } from "../../../src/explain.js";
 import { renderGrants } from "../../../src/grants.js";
 import { chooseFiles } from "../../../src/project.js";
+import { reviewBrief } from "../../../src/review.js";
+import { shareParts } from "./share.js";
 import { memberCan, renderText } from "../../../src/report.js";
 import { SKIP_DIRS } from "../../../src/static.js";
 import { version as VERSION } from "../../../package.json";
@@ -62,7 +64,21 @@ if (shared) {
   queueMicrotask(() => $("pane-github").requestSubmit());
 }
 for (const button of document.querySelectorAll("[data-copy]")) {
-  button.addEventListener("click", () => copy(button.dataset.copy, button, "Copy"));
+  const label = button.getAttribute("aria-label");
+  button.addEventListener("click", async () => {
+    await toClipboard(button.dataset.copy);
+    button.classList.add("done");
+    button.setAttribute("aria-label", "Copied");
+    setTimeout(() => {
+      button.classList.remove("done");
+      button.setAttribute("aria-label", label);
+    }, 2000);
+  });
+}
+// Phones and tablets can't pick a folder, so they're offered the ZIP.
+if (matchMedia("(hover: none) and (pointer: coarse)").matches) {
+  $("pick-folder").hidden = true;
+  $("drop").querySelector("p").textContent = "Choose your project's ZIP";
 }
 $("example").addEventListener("click", () => {
   $("repo").value = SAMPLE;
@@ -128,7 +144,9 @@ async function fromGitHub(input) {
       },
     }));
   const project = await fromEntries(entries, `github.com/${owner}/${repo}${dir ? `/${dir}` : ""}`, false);
-  history.replaceState(null, "", `#repo=github.com/${owner}/${repo}${branch || dir ? `/tree/${ref}${dir ? `/${dir}` : ""}` : ""}`);
+  // Where a shared link points: the same repository, branch and folder.
+  project.github = `github.com/${owner}/${repo}${branch || dir ? `/tree/${ref}${dir ? `/${dir}` : ""}` : ""}`;
+  history.replaceState(null, "", `#repo=${project.github}`);
   if (tree.truncated) project.note = "The repository is very large, so GitHub listed only part of it.";
   return project;
 }
@@ -142,8 +160,10 @@ async function fromEntries(all, label, stripTop = true) {
   }
   const sqls = await readAll(chosen.migrations);
   const texts = await readAll(chosen.code);
+  const config = chosen.config ? await chosen.config.read() : null;
   return {
     label,
+    config,
     migrations: chosen.migrations.map((e, i) => ({ name: e.rel.split("/").at(-1), sql: sqls[i] })),
     code: chosen.code.map((e, i) => ({ path: e.rel, text: texts[i] })),
     note: chosen.codeFilesFound > chosen.code.length ? `The first ${chosen.code.length} of ${chosen.codeFilesFound} code files were scanned.` : "",
@@ -345,6 +365,7 @@ function show(report, project, testing) {
 
   const actions = el("div", { className: "mt-5 flex flex-wrap gap-3" });
   if (fixable) actions.append(copyButton("Copy the fix for your AI builder", () => fixPrompt(report), "btn btn-ink"));
+  if (e.problems.length || e.notes.length) actions.append(copyButton("Copy a review for your coding agent", () => reviewBrief(report), "btn btn-line"));
   const rerun = el("button", { type: "button", className: "btn btn-line" }, "Inspect again");
   rerun.addEventListener("click", () => again?.());
   actions.append(rerun);
@@ -361,7 +382,7 @@ function show(report, project, testing) {
       ...(project.note ? [el("p", { className: "mt-1 text-[0.95rem] text-muted" }, project.note)] : []),
       actions,
       ...(fixable ? [
-        el("p", { className: "mt-3 text-[0.95rem] text-muted" }, "Paste the fix into Lovable, Bolt, Cursor or Claude. When your app is updated, inspect it again."),
+        el("p", { className: "mt-3 text-[0.95rem] text-muted" }, "Building in Lovable or Bolt? Paste the fix there. Working in Claude Code, Cursor or Codex? Paste the review: it asks the agent to check each finding against your code first, fix the real ones, and note the rest in rls-probe.json so they stop counting. Then inspect again."),
         el("p", { className: "mt-1 text-[0.95rem] text-muted" }, "Rather have a person fix it? ", el("a", { href: HIRE, className: "font-semibold text-ink underline decoration-2 underline-offset-4" }, "Hire me"), ", I built rls-probe."),
       ] : []),
     ),
@@ -389,10 +410,16 @@ function show(report, project, testing) {
     ))), all));
   }
   if (report.results.length) sections.push(checklist(report));
-  if (e.grade === "A" || e.grade === "B") {
+  let shareCanvas = null;
+  if (e.grade) {
+    const parts = shareParts(() => explain(report), report, project, el, copy);
+    shareCanvas = parts[0];
     const line = badge(report);
-    sections.push(section("Show your grade", "Add it to your README. It shows today's grade, so inspect again after changes to keep it honest.",
-      el("pre", { className: "codebox" }, line), copyButton("Copy the badge", line, "btn btn-line")));
+    const readme = e.grade === "A" || e.grade === "B" ? [
+      el("p", { className: "mt-6 text-[0.95rem] text-muted" }, "Or add the grade to your README. It shows today's grade, so inspect again after changes to keep it honest."),
+      el("pre", { className: "codebox" }, line), copyButton("Copy the badge", line, "btn btn-line"),
+    ] : [];
+    sections.push(section("Share your grade", null, ...parts, ...readme));
   }
   if (e.grants) {
     const body = [el("p", {}, e.grants.summary)];
@@ -404,6 +431,11 @@ function show(report, project, testing) {
       el("span", { className: "sev sev-review" }, "Check"),
       el("div", {}, el("p", {}, n.headline), el("details", { className: "mt-1.5" }, el("summary", {}, "If it isn't on purpose"), el("p", { className: "ask" }, n.ask), slot(n))),
     )))));
+  }
+  if (e.accepted.length || e.acceptNotes.length) {
+    sections.push(section("Accepted by you", "Listed in your rls-probe.json with a reason, so they don't count toward the grade.",
+      el("ul", { className: "grid gap-2" }, ...e.accepted.map((a) => el("li", {}, el("span", { className: "font-semibold" }, a.headline), " ", el("span", { className: "text-muted" }, `Your reason: ${a.reason} (${a.id})`))),
+        ...e.acceptNotes.map((n) => el("li", { className: "text-muted" }, n)))));
   }
   if (e.team) sections.push(section("Shared with teammates", null, el("p", {}, capitalize(e.team.headline.replace(/^Teammates: /, "")))));
   if (e.missing.length) {
@@ -422,6 +454,7 @@ function show(report, project, testing) {
   return {
     // The tests are done: each problem gets its tested fix, or keeps only the request.
     update(migration) {
+      shareCanvas?.redraw();
       const now = explain(report);
       for (const item of [...now.problems, ...now.notes]) slots.get(`${item.kind} ${item.where}`)?.replaceChildren(...yourself(item));
       const passed = now.problems.filter((p) => p.selfFix?.tested).length;
@@ -533,6 +566,12 @@ function copyButton(label, text, className) {
 }
 
 async function copy(value, button, label) {
+  await toClipboard(value);
+  button.textContent = "Copied";
+  setTimeout(() => (button.textContent = label), 2000);
+}
+
+async function toClipboard(value) {
   try {
     await navigator.clipboard.writeText(value);
   } catch {
@@ -542,8 +581,6 @@ async function copy(value, button, label) {
     document.execCommand("copy");
     area.remove();
   }
-  button.textContent = "Copied";
-  setTimeout(() => (button.textContent = label), 2000);
 }
 
 // Elements are built with text nodes only: names from the repository never become HTML.

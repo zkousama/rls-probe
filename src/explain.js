@@ -1,6 +1,7 @@
 // What a report means for someone who doesn't read SQL, and what to ask an AI
 // builder (Lovable, Bolt, Cursor, Claude) to change. Every sentence comes from the
 // report: the policy names, owner columns and grants are the app's own.
+import { findingId } from "./accept.js";
 import { teamReach } from "./report.js";
 
 const SEE = { read: "see", update: "change", delete: "delete", insert: "add" };
@@ -8,7 +9,7 @@ const CMD = { read: "SELECT", update: "UPDATE", delete: "DELETE", insert: "INSER
 const LABEL = { critical: "CRITICAL", high: "HIGH", medium: "MEDIUM", review: "CHECK" };
 
 export function explain(report) {
-  const items = report.findings.map((f) => ({ severity: f.severity, kind: f.kind, where: f.where, ...say(f, report), selfFix: selfFix(f, report) }));
+  const items = report.findings.map((f) => ({ id: findingId(f), severity: f.severity, kind: f.kind, where: f.where, ...say(f, report), selfFix: selfFix(f, report) }));
   const g = report.grantsChange;
   return {
     grade: grade(report),
@@ -18,6 +19,9 @@ export function explain(report) {
     grants: g ? grantsPart(g) : null,
     missing: report.load.missing ?? [],
     team: teamPart(report),
+    // Accepted in the app's rls-probe.json: listed with the reason, never counted.
+    accepted: (report.accepted ?? []).map((f) => ({ id: findingId(f), severity: f.severity, headline: say(f, report).headline, reason: f.reason })),
+    acceptNotes: report.acceptNotes ?? [],
   };
 }
 
@@ -71,8 +75,15 @@ export function renderPlain(report) {
   }
   if (e.grants) out.push(e.grants.headline, "");
   if (e.team) out.push(e.team.headline, "");
+  if (e.accepted.length) {
+    out.push("Accepted in rls-probe.json, so not counted:");
+    for (const a of e.accepted) out.push(`  - ${a.id}: ${a.reason}`);
+    out.push("");
+  }
+  for (const note of e.acceptNotes) out.push(note, "");
   if (e.missing.length) out.push(`Not checked: ${e.missing.join(", ")}. Your migrations use these tables but never create them (were they made in the dashboard?).`, "");
-  if (e.problems.length || e.grants?.lines.length) out.push("To fix them with Lovable, Bolt, Cursor or Claude: run rls-probe with --prompt and paste what it prints.", "");
+  if (e.problems.length || e.grants?.lines.length) out.push("To fix them with Lovable or Bolt: run rls-probe with --prompt and paste what it prints.", "");
+  if (e.problems.length || e.notes.length) out.push("To have an agent that reads your code (Claude Code, Cursor, Codex) check each one and fix the real ones: run it with --review and paste what it prints.", "");
   if (e.problems.length) out.push("To write the fixes that pass rls-probe's own test as a migration: run it with --fix-policies.", "");
   return out.join("\n");
 }
@@ -115,6 +126,8 @@ export function renderMarkdown(report, details = "") {
   }
   if (e.grants) out.push(e.grants.headline, "");
   if (e.team) out.push(e.team.headline, "");
+  if (e.accepted.length) out.push(`Accepted in \`rls-probe.json\`, so not counted: ${e.accepted.map((a) => `\`${a.id}\` (${a.reason})`).join(", ")}.`, "");
+  for (const note of e.acceptNotes) out.push(note, "");
   if (e.missing.length) out.push(`Not checked: ${e.missing.map((t) => `\`${t}\``).join(", ")}. The migrations use these tables but never create them.`, "");
   if (e.problems.length || e.grants?.lines.length) {
     out.push("<details><summary>Fix prompt for Lovable, Bolt, Cursor or Claude</summary>", "", "```text", fixPrompt(report).trimEnd(), "```", "", "</details>", "");
@@ -251,13 +264,15 @@ function say(f, report) {
         ask: `If "${f.bucket}" holds anything private, make the bucket private and share files with signed URLs.`,
       };
     case "service-key":
+      if (f.test) return { headline: `What looks like a secret Supabase key (${f.key === "secret" ? "an sb_secret_ key" : "a service role key"}) is in a test file, ${t}; probably made up for the test.`, ask: `If it's a real key, remove it from ${t} and replace it in the Supabase dashboard: in a public repository anyone can read it. If it's made up, accept it in rls-probe.json.` };
       return {
         headline: `Your secret Supabase key (${f.key === "secret" ? "an sb_secret_ key" : "the service role key"}) is in your app's code at ${t}, so anyone can copy it and skip every rule.`,
         ask: `Remove the key from ${t}. Anything that needs it must run in a Supabase edge function, never in the browser. Then replace the key, because it has already been exposed.`,
       };
     case "secret":
+      if (f.test) return { headline: `What looks like ${/^[aeiou]/i.test(f.title) ? "an" : "a"} ${f.title} is in a test file, ${t}; probably made up for the test.`, ask: `If it's a real key, remove it from ${t} and rotate it with the provider: in a public repository anyone can read it. If it's made up, accept it in rls-probe.json.` };
       return {
-        headline: `A ${f.title.replace(/^./, (c) => c.toLowerCase())} is in your app's code at ${t}.`,
+        headline: `${/^[aeiou]/i.test(f.title) ? "An" : "A"} ${f.title} is in your app's code at ${t}.`,
         ask: `Remove it from ${t}, use it only in server code (an edge function), and rotate it with the provider, because it has already been exposed.`,
       };
     case "browser-secret":

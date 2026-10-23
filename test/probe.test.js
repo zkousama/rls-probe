@@ -173,7 +173,8 @@ test("the other user is a plain stranger: no staff role, not in A's organization
 });
 
 test("real holes in a messy app are still found", () => {
-  assert.ok(messyFindings.includes("critical photos: Visitors who aren't signed in can change data"), "seeded through a LIKE check");
+  // Visitors can only add photos: high, since forms do that on purpose; changing or deleting is critical.
+  assert.ok(messyFindings.includes("high photos: Visitors who aren't signed in can add rows"), "seeded through a LIKE check");
   assert.ok(messyFindings.includes("high posts: Visitors can read users' data"), "row_security = off didn't leak");
   assert.ok(messyFindings.includes("high server_notes: Row-level security is off"), "reported though visitors are revoked");
   assert.ok(messyFindings.includes("high app_settings: Any signed-in user can change shared data"), "updated_by doesn't make it owned");
@@ -401,4 +402,61 @@ test("fixes not tried before the deadline are marked untested, not failed", asyn
   assert.ok(fixes.length && fixes.every((f) => !f.verified && f.untested === "ran out of time"));
   report.fixes = fixes;
   assert.ok(explain(report).problems.every((p) => !p.selfFix?.tested), "nothing untested is offered as tested");
+});
+
+// rls-probe.json records findings someone checked and ruled out, with the reason. They're
+// listed as accepted, not counted; an entry without a reason, or matching nothing, is
+// pointed out.
+test("rls-probe.json accepts findings with a reason, and says what it can't use", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rls-probe-accept-"));
+  fs.cpSync(leaky, dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "rls-probe.json"), JSON.stringify({ accept: [
+    { finding: "user-read:messages", reason: "messages are a public chat room" },
+    { finding: "view-bypass:order_totals" },
+    { finding: "visitor-read:no_such_table", reason: "fixed last week" },
+  ] }));
+  const { report } = run(dir);
+  const ids = report.findings.map((f) => `${f.kind}:${f.where}`);
+  assert.ok(!ids.includes("user-read:messages"), "the accepted finding doesn't count");
+  assert.ok(ids.includes("view-bypass:order_totals"), "one without a reason still counts");
+  assert.deepEqual(report.accepted.map((f) => [f.kind, f.reason]), [["user-read", "messages are a public chat room"]]);
+  assert.equal(report.acceptNotes.length, 2);
+  const out = runText(dir);
+  assert.match(out, /Accepted in rls-probe\.json, so not counted:\n {2}- user-read:messages: messages are a public chat room/);
+  assert.match(out, /view-bypass:order_totals has no reason, so it still counts/);
+  assert.match(out, /accepts visitor-read:no_such_table, which no longer comes up/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// The review is for an agent that reads the code: each finding with what was seen, the
+// migration lines behind it, a check to run, why it might not apply, and the tested fix.
+test("the review for coding agents gives evidence, sources, checks that run, and the tested fix", async () => {
+  const out = runText(leaky, "--review");
+  assert.match(out, /^# rls-probe review: grade F/);
+  assert.match(out, /## \d\. HIGH `user-write:messages`/);
+  assert.match(out, /What rls-probe saw: signed in as user B, who owns nothing of user A's, has no role and is in another organization, it could change user A's row in messages\./);
+  assert.match(out, /Where: messages is created at 20250101000000_init\.sql:33; policy "auth write" \(update, to authenticated\) at 20250101000000_init\.sql:40\./);
+  assert.match(out, /Tested fix \(afterwards, each signed-in user can change only their own rows in messages\):/);
+  assert.match(out, /"accept": \[\{ "finding": "rls-off:orders"/);
+  // Every check runs on the app's database, and leaves it as it was.
+  const { loadDatabase } = await import("../src/load.js");
+  const { findMigrations, readMigrations } = await import("../src/node.js");
+  const { baseSnapshot } = await import("../src/snapshot.js");
+  const { db } = await loadDatabase(readMigrations(findMigrations(leaky)), { snapshot: await baseSnapshot() });
+  const checks = [...out.matchAll(/```sql\n(begin;[\s\S]*?rollback;)\n```/g)].map((m) => m[1]).filter((sql) => !sql.includes("/*"));
+  assert.ok(checks.length >= 4);
+  for (const sql of checks) await db.exec(sql);
+  await db.close();
+});
+
+// A key in a test file is usually made up for the test (a secret scanner's own tests are
+// full of them). It's worth a look, not a critical problem.
+test("keys in test files are worth a look, not critical", async () => {
+  const { scanCode } = await import("../src/static.js");
+  const key = ["sk", "proj", "A".repeat(40)].join("-");
+  const found = scanCode([
+    { path: "src/lib/__tests__/scan.test.ts", text: `const fake = "${key}";` },
+    { path: "src/lib/openai.ts", text: `const real = "${key}";` },
+  ]);
+  assert.deepEqual(found.map((f) => [f.where, f.severity]), [["src/lib/__tests__/scan.test.ts:1", "review"], ["src/lib/openai.ts:1", "critical"]]);
 });

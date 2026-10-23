@@ -80,6 +80,33 @@ passed a test:
 
 Run rls-probe again afterwards to check the fix.
 
+### With an agent that reads your code
+
+rls-probe sees the database your migrations build. An agent like Claude Code, Cursor
+or Codex sees the rest: your code, your server functions, what's meant to be public.
+
+```sh
+npx rls-probe path/to/your-app --review
+```
+
+prints a review to hand it (the page has a button for the same). For each finding it
+gives what rls-probe did and saw ("signed in as a user who owns nothing, it changed
+user A's row in messages"), the migration lines behind it, a check to run on a local
+database (as a user who owns nothing, in a transaction that's rolled back), the
+reasons it might not apply, and the tested fix. The agent sorts each one into real,
+already handled, on purpose or wrong, fixes the real ones, and records the rest in
+`rls-probe.json` with the reason:
+
+```json
+{ "accept": [{ "finding": "visitor-read:products", "reason": "a public catalog" }] }
+```
+
+Accepted findings stop counting toward the grade and the exit code, but stay listed
+with their reasons (and go into SARIF as suppressed, so code scanning shows them
+closed). An entry without a reason is ignored, and one that no longer matches
+anything is pointed out. Every finding's name is in the report, like
+`user-write:messages`.
+
 ### Fixes that are tested before you see them
 
 <picture>
@@ -120,7 +147,7 @@ In Cursor, Windsurf, Claude Desktop or any other MCP client, add the server:
 ```json
 {
   "mcpServers": {
-    "rls-probe": { "command": "npx", "args": ["-y", "rls-probe@0.7.1", "mcp"] }
+    "rls-probe": { "command": "npx", "args": ["-y", "rls-probe@0.8.0", "mcp"] }
   }
 }
 ```
@@ -135,6 +162,7 @@ migration) and `write_supabase_grants_migration` (the `--fix` migration).
 |---|---|
 | (none) | The plain summary, then the details |
 | `--prompt` | The request for an AI builder, with the tested SQL |
+| `--review` | A review for an agent that reads your code: evidence, sources, checks, tested fixes |
 | `--markdown` | A Markdown report, for pull requests and AI agents |
 | `--sarif` | SARIF, for GitHub code scanning |
 | `--json` | Everything, for scripts |

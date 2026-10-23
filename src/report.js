@@ -1,3 +1,5 @@
+import { findingId } from "./accept.js";
+
 export const SENSITIVE = /(email|phone|address|latitude|longitude|zip_code|postal|password|token|secret|iban|ssn|birth|salary|stripe|customer_id|api_key)/i;
 export const ORDER = { critical: 0, high: 1, medium: 2, review: 3 };
 const TALLY = /(count|views?|likes?|votes?|score|clicks?|plays?|hits?|visits?|seconds|minutes|duration|attempts|usage|streak|updated_at|last_seen|last_active|last_\w+_at)/i;
@@ -27,7 +29,9 @@ export function findingsFrom(results, views, functions, buckets, storage) {
       continue;
     }
     if (anonWrites.length) {
-      findings.push({ kind: "visitor-write", actions: anonWrites, severity: r.owned ? "critical" : "high", where: r.table, title: "Visitors who aren't signed in can change data",
+      // Changing or deleting is worse than adding rows, which forms and page counters do on purpose.
+      const adds = anonWrites.every((a) => a === "insert");
+      findings.push({ kind: "visitor-write", actions: anonWrites, severity: adds ? (r.owned ? "high" : "medium") : r.owned ? "critical" : "high", where: r.table, title: adds ? "Visitors who aren't signed in can add rows" : "Visitors who aren't signed in can change data",
         detail: `Without signing in, anyone can ${verbs(anonWrites)} rows.`, fix: "Limit the insert, update and delete policies to the authenticated role, and check ownership with auth.uid()." });
     }
     if (r.owned && anon.read) {
@@ -172,7 +176,7 @@ export function renderText({ target, load, seedProblems, results, findings, stor
   }
   out.push("", findings.length ? `${findings.length} finding${findings.length === 1 ? "" : "s"}` : "No findings.", "");
   for (const f of findings) {
-    out.push(`${f.severity.toUpperCase().padEnd(8)} ${f.where}: ${f.title}`);
+    out.push(`${f.severity.toUpperCase().padEnd(8)} ${findingId(f)}  ${f.title}`);
     out.push(`         ${f.detail}`);
     if (f.fix) out.push(`         Fix: ${f.fix}`);
     out.push("");

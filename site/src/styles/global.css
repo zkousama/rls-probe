@@ -205,11 +205,16 @@
   .theme-toggle .sun, :root[data-theme="dark"] .theme-toggle .moon, :root:not([data-theme]) .theme-toggle { display: none; }
   :root[data-theme="dark"] .theme-toggle .sun { display: block; }
 
-  /* A code box with a copy button in its corner. */
-  .copyable { position: relative; }
-  .copyable .codebox { white-space: pre-wrap; overflow-wrap: anywhere; padding-right: 4.75rem; }
-  .corner-copy { position: absolute; top: 8px; right: 8px; padding: 3px 10px; border: 1px solid var(--color-rule); border-radius: 4px; background: var(--color-surface); color: var(--color-ink); font-size: 0.8rem; font-weight: 700; cursor: pointer; }
-  .corner-copy:hover { border-color: var(--color-ink); }
+  .share-preview { display: block; width: 100%; max-width: 720px; height: auto; border: 1px solid var(--color-rule); border-radius: 6px; }
+
+  /* A copy icon beside a heading; a tick for a moment once copied. */
+  .icon-copy { display: inline-grid; place-items: center; width: 2.1rem; height: 2.1rem; border-radius: 6px; color: var(--color-muted); cursor: pointer; }
+  .icon-copy:hover { color: var(--color-ink); background: var(--color-ink-soft); }
+  .icon-copy svg { grid-area: 1 / 1; width: 1.15rem; height: 1.15rem; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .icon-copy .i-done, .icon-copy.done .i-copy { display: none; }
+  .icon-copy.done .i-done { display: block; }
+  .icon-copy.done { color: var(--color-pass); }
+  .codebox.wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
 
   .codebox { margin: 12px 0; padding: 14px 16px; background: var(--color-paper); border: 1px solid var(--color-rule); border-radius: 4px; overflow-x: auto; font-family: var(--font-mono); font-size: 0.82rem; line-height: 1.55; white-space: pre; }
 
@@ -249,6 +254,7 @@
   .slip-head .placard .p-letter { font-size: 4.75rem; }
   .slip-section { padding: 22px 18px; }
   .finding { grid-template-columns: 1fr; gap: 2px; }
+  .btn { white-space: normal; height: auto; min-height: 3rem; padding-block: 0.55rem; text-align: center; }
 }
 
 @media (prefers-reduced-motion: reduce) {

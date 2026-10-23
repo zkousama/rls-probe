@@ -126,6 +126,10 @@ import Diagram from "../components/Diagram.astro";
           <p class="mt-1.5 text-muted">Tables made only in the Supabase dashboard, which aren't in your migrations. It also can't know what you mean to be public, so some results are marked as worth checking rather than as problems.</p>
         </div>
         <div>
+          <h3 class="font-bold">What if a finding is wrong for my app?</h3>
+          <p class="mt-1.5 text-muted">It can be: a table may be public on purpose, or a policy changed in the dashboard. Paste the review into Claude Code, Cursor or Codex: it gives your agent the evidence for each finding and asks it to check against your code before fixing anything. Whatever doesn't apply goes in an <code>rls-probe.json</code> file with your reason, and stops counting.</p>
+        </div>
+        <div>
           <h3 class="font-bold">Does it agree with a real Supabase?</h3>
           <p class="mt-1.5 text-muted">It's tested against one. On a 15-table app built with Lovable, all 100 checks matched a real local Supabase. The fixes it suggests, the functions it calls and the teammate it adds were checked the same way: 136 of 136 matched.</p>
         </div>
@@ -145,18 +149,27 @@ import Diagram from "../components/Diagram.astro";
         <p class="mt-3 max-w-[60ch] text-muted">The same inspection runs from the command line, in CI on every pull request, and as a tool your AI agent calls itself.</p>
         <div class="mt-8 grid gap-8 md:grid-cols-3">
           <div class="min-w-0">
-            <h3 class="font-bold">Command line</h3>
-            <div class="copyable"><pre class="codebox">npx rls-probe .</pre><button type="button" class="corner-copy" data-copy="npx rls-probe .">Copy</button></div>
+<div class="flex items-center justify-between gap-3">
+              <h3 class="font-bold">Command line</h3>
+              <button type="button" class="icon-copy" data-copy="npx rls-probe ." aria-label="Copy the command" title="Copy"><svg class="i-copy" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg><svg class="i-done" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg></button>
+            </div>
+            <pre class="codebox wrap">npx rls-probe .</pre>
             <p class="text-[0.95rem] text-muted">Add <code>--prompt</code> for an AI builder, <code>--fix-policies</code> to write the tested fixes, <code>--fix</code> for the October 30 grants.</p>
           </div>
           <div class="min-w-0">
-            <h3 class="font-bold">GitHub Action</h3>
-            <div class="copyable"><pre class="codebox">- uses: zkousama/rls-probe@v0</pre><button type="button" class="corner-copy" data-copy="- uses: zkousama/rls-probe@v0">Copy</button></div>
+<div class="flex items-center justify-between gap-3">
+              <h3 class="font-bold">GitHub Action</h3>
+              <button type="button" class="icon-copy" data-copy="- uses: zkousama/rls-probe@v0" aria-label="Copy the workflow step" title="Copy"><svg class="i-copy" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg><svg class="i-done" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg></button>
+            </div>
+            <pre class="codebox wrap">- uses: zkousama/rls-probe@v0</pre>
             <p class="text-[0.95rem] text-muted">Fails the build when a migration opens data.</p>
           </div>
           <div class="min-w-0">
-            <h3 class="font-bold">Claude Code and MCP</h3>
-            <div class="copyable"><pre class="codebox">/plugin install rls-probe {"\u2011\u2011marketplace"} zkousama/rls-probe</pre><button type="button" class="corner-copy" data-copy="/plugin install rls-probe --marketplace zkousama/rls-probe">Copy</button></div>
+<div class="flex items-center justify-between gap-3">
+              <h3 class="font-bold">Claude Code and MCP</h3>
+              <button type="button" class="icon-copy" data-copy="/plugin install rls-probe --marketplace zkousama/rls-probe" aria-label="Copy the install command" title="Copy"><svg class="i-copy" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg><svg class="i-done" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg></button>
+            </div>
+            <pre class="codebox wrap">/plugin install rls-probe {"\u2011\u2011marketplace"} zkousama/rls-probe</pre>
             <p class="text-[0.95rem] text-muted">Or <code>npx rls-probe mcp</code> in Cursor, Windsurf or Claude Desktop.</p>
           </div>
         </div>

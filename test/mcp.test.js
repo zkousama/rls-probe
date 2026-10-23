@@ -4,15 +4,20 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
-import { test } from "node:test";
+import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const cli = fileURLToPath(new URL("../src/cli.js", import.meta.url));
 const fixtures = fileURLToPath(new URL("./fixtures", import.meta.url));
 
+// Servers still running when the tests end (a failed assertion skips close()) are stopped.
+const servers = [];
+after(() => servers.forEach((s) => s.kill()));
+
 // A minimal MCP client: one server process, requests matched to replies by id.
 function connect(cwd) {
   const server = spawn(process.execPath, [cli, "mcp"], { cwd, stdio: ["pipe", "pipe", "inherit"] });
+  servers.push(server);
   const waiting = new Map();
   readline.createInterface({ input: server.stdout }).on("line", (line) => {
     const message = JSON.parse(line);
@@ -44,8 +49,10 @@ test("the MCP server starts, lists its tools and checks an app", async () => {
   assert.equal(check.result.isError, false);
   assert.match(check.result.content[0].text, /^rls-probe: grade F\. 6 problems to fix/);
   assert.equal(check.result.structuredContent.grade, "F");
-  assert.match(check.result.content[0].text, /## What to change/);
-  assert.match(check.result.content[0].text, /rls-probe tested this SQL on a copy of the database/);
+  // The review for agents that read the code: check each finding, then fix or accept it.
+  assert.match(check.result.content[0].text, /## Review and fix/);
+  assert.match(check.result.content[0].text, /Record the ones you rule out in rls-probe\.json/);
+  assert.match(check.result.content[0].text, /Tested fix \(afterwards, /);
   assert.equal(check.result.structuredContent.exitCode, 1);
   const missing = await mcp.request("tools/call", { name: "check_supabase_security", arguments: { path: "nowhere" } });
   assert.equal(missing.result.isError, true);
