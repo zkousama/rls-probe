@@ -34,3 +34,15 @@ jobs:
       - name: The leaky app failed the check
         if: steps.leaky.outcome != 'failure'
         run: exit 1
+
+  # The web page builds, so a change that breaks it shows on the pull request.
+  site:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: npm install --no-audit --no-fund --ignore-scripts
+      - run: npm ci --prefix site --no-audit --no-fund --ignore-scripts
+      - run: npm run --prefix site build

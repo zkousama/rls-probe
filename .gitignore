@@ -2,3 +2,7 @@ node_modules/
 *.log
 .DS_Store
 snapshot/
+_site/
+site/node_modules/
+site/public/base.tar.gz
+site/.astro/

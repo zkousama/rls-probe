@@ -1,0 +1,185 @@
+---
+import "../styles/global.css";
+import pkg from "../../../package.json";
+
+const base = import.meta.env.BASE_URL;
+const repo = "https://github.com/zkousama/rls-probe";
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>rls-probe: is your Supabase app leaking data?</title>
+    <meta name="description" content="Inspect a Supabase, Lovable or Bolt app for data leaks in your browser. rls-probe rebuilds your database, signs in two test users and tries to read and change each other's data. Nothing is uploaded." />
+    <meta name="theme-color" content="#fbfbf8" />
+    <link rel="icon" href={`${base}favicon.svg`} type="image/svg+xml" />
+  </head>
+  <body class="min-h-screen">
+    <header class="mx-auto flex max-w-6xl items-center justify-between px-5 py-6 sm:px-8">
+      <a href={base} class="text-xl font-extrabold text-ink [font-stretch:125%]">rls-probe</a>
+      <nav class="flex items-center gap-6 text-[0.95rem] text-muted">
+        <a href="#how" class="hidden hover:text-text sm:inline">How it works</a>
+        <a href="#developers" class="hidden hover:text-text sm:inline">For developers</a>
+        <a href={repo} class="font-semibold text-text underline decoration-rule decoration-2 underline-offset-4 hover:decoration-ink">Source on GitHub</a>
+      </nav>
+    </header>
+
+    <main class="mx-auto max-w-6xl px-5 pb-20 sm:px-8">
+      <section class="grid items-start gap-12 pt-6 pb-10 lg:grid-cols-[1.35fr_0.65fr] lg:pt-12">
+        <div>
+          <h1 class="max-w-[14ch] text-[clamp(2.6rem,6.4vw,4.75rem)] leading-[0.98] font-extrabold tracking-[-0.02em] text-ink [font-stretch:125%]">
+            Is your Supabase app leaking data?
+          </h1>
+          <p class="mt-6 max-w-[58ch] text-[1.15rem] leading-relaxed text-muted">
+            Find out in a few seconds. rls-probe rebuilds your app's database in this browser, signs in two test users, and tries to read and change each other's data. Then it tells you what to fix, in plain words. Nothing is uploaded.
+          </p>
+
+          <div class="mt-10 max-w-2xl" id="checker">
+            <p class="mb-3 font-bold text-text [font-stretch:110%]">Where's your app?</p>
+            <div class="mb-4 flex flex-wrap gap-x-6 gap-y-2" role="tablist" aria-label="Where's your app?">
+              <button role="tab" id="tab-github" aria-controls="pane-github" aria-selected="true" class="tab">GitHub link</button>
+              <button role="tab" id="tab-files" aria-controls="pane-files" aria-selected="false" tabindex="-1" class="tab">Folder or ZIP</button>
+              <button role="tab" id="tab-sql" aria-controls="pane-sql" aria-selected="false" tabindex="-1" class="tab">Pasted SQL</button>
+            </div>
+
+            <form id="pane-github" role="tabpanel" aria-labelledby="tab-github">
+              <label for="repo" class="sr-only">Your app's GitHub link</label>
+              <div class="flex flex-col gap-3 sm:flex-row">
+                <input id="repo" type="text" inputmode="url" autocomplete="off" spellcheck="false" required placeholder="https://github.com/you/your-app"
+                  class="h-12 w-full rounded-md border-2 border-text bg-white px-4 text-[1.02rem] placeholder:text-muted/70 focus:border-ink focus:outline-none" />
+                <button type="submit" class="btn btn-ink">Inspect my app</button>
+              </div>
+              <p class="mt-3 text-[0.95rem] text-muted">
+                Public repositories. For a private one, choose Folder or ZIP.{" "}
+                <button type="button" id="example" class="font-semibold text-ink underline decoration-2 underline-offset-4">Inspect a sample app with known holes</button>
+              </p>
+            </form>
+
+            <div id="pane-files" role="tabpanel" aria-labelledby="tab-files" hidden>
+              <div id="drop" class="rounded-md border-2 border-dashed border-rule bg-white px-6 py-9 text-center transition-colors">
+                <input id="files" type="file" webkitdirectory multiple hidden />
+                <input id="zip" type="file" accept=".zip,application/zip" hidden />
+                <p class="font-bold text-text [font-stretch:110%]">Drop your project folder or its ZIP here</p>
+                <div class="mt-4 flex flex-wrap justify-center gap-3">
+                  <button type="button" id="pick-folder" class="btn btn-line">Choose a folder</button>
+                  <button type="button" id="pick-zip" class="btn btn-line">Choose a ZIP</button>
+                </div>
+              </div>
+              <p class="mt-3 text-[0.95rem] text-muted">From Bolt, use Download. From GitHub, Code, then Download ZIP. From Lovable, connect GitHub and use the link. The files stay on this computer.</p>
+            </div>
+
+            <form id="pane-sql" role="tabpanel" aria-labelledby="tab-sql" hidden>
+              <label for="sql" class="sr-only">Your database schema</label>
+              <textarea id="sql" rows="9" spellcheck="false" required placeholder="create table public.notes (...);"
+                class="w-full rounded-md border-2 border-text bg-white p-4 font-mono text-[0.85rem] leading-relaxed focus:border-ink focus:outline-none"></textarea>
+              <div class="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p class="text-[0.95rem] text-muted">Your migrations, or the output of <code>supabase db dump</code>.</p>
+                <button type="submit" class="btn btn-ink">Inspect</button>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        <figure class="justify-self-center lg:justify-self-end lg:pt-3">
+          <div class="placard placard-lg grade-F -rotate-2" aria-hidden="true">
+            <span class="p-title">Database inspection</span>
+            <span class="p-letter">F</span>
+            <span class="p-sub">Orders open to anyone</span>
+          </div>
+          <figcaption class="mt-5 max-w-[30ch] text-[0.9rem] text-muted">Every inspection ends with a grade, from A to F, and a list of what to fix.</figcaption>
+        </figure>
+      </section>
+
+      <section id="progress" class="max-w-2xl rounded-md border border-rule bg-white p-6" aria-live="polite" hidden>
+        <p class="font-bold text-ink [font-stretch:112%]">Inspecting…</p>
+        <p id="progress-sub" class="text-[0.95rem] text-muted"></p>
+        <ol class="steps mt-4 grid gap-1.5"></ol>
+      </section>
+
+      <section id="error" role="alert" class="max-w-2xl rounded-md border-l-4 border-stamp bg-stamp-soft p-5 text-text" hidden></section>
+
+      <section id="result" class="scroll-mt-6" aria-live="polite" hidden></section>
+
+      <section id="how" class="mt-24 border-t-2 border-text pt-10">
+        <h2 class="text-[clamp(1.8rem,3.6vw,2.6rem)] leading-tight font-extrabold text-ink [font-stretch:120%]">How an inspection works</h2>
+        <ol class="mt-8 grid gap-10 md:grid-cols-3">
+          <li>
+            <span class="block text-5xl leading-none font-black text-ink [font-stretch:125%]">1</span>
+            <h3 class="mt-4 text-lg font-bold">Your database is rebuilt</h3>
+            <p class="mt-2 text-muted">Your migrations run in a real Postgres inside this browser, with the parts of Supabase your rules depend on. Your live database is never touched.</p>
+          </li>
+          <li>
+            <span class="block text-5xl leading-none font-black text-ink [font-stretch:125%]">2</span>
+            <h3 class="mt-4 text-lg font-bold">Two test users move in</h3>
+            <p class="mt-2 text-muted">Each gets rows of their own in every table. Then a visitor and the second user try to see, change, delete and add the first user's rows.</p>
+          </li>
+          <li>
+            <span class="block text-5xl leading-none font-black text-ink [font-stretch:125%]">3</span>
+            <h3 class="mt-4 text-lg font-bold">You get a grade and the fixes</h3>
+            <p class="mt-2 text-muted">Each problem is explained in plain words, with a request you can paste into Lovable, Bolt, Cursor or Claude to fix it.</p>
+          </li>
+        </ol>
+      </section>
+
+      <section class="mt-20 grid gap-x-12 gap-y-8 md:grid-cols-2">
+        <div>
+          <h3 class="font-bold">Is my code uploaded anywhere?</h3>
+          <p class="mt-1.5 text-muted">No. With a GitHub link, your browser reads the repository straight from GitHub. With a folder or ZIP, the files never leave your computer.</p>
+        </div>
+        <div>
+          <h3 class="font-bold">Does it touch my live database?</h3>
+          <p class="mt-1.5 text-muted">Never. It builds an empty copy from your migrations and tests that. None of your real data is read.</p>
+        </div>
+        <div>
+          <h3 class="font-bold">What doesn't it check?</h3>
+          <p class="mt-1.5 text-muted">Tables made only in the Supabase dashboard, which aren't in your migrations, and storage policies. It also can't know what you mean to be public, so some results are marked as worth checking rather than as problems.</p>
+        </div>
+        <div>
+          <h3 class="font-bold">Does it agree with a real Supabase?</h3>
+          <p class="mt-1.5 text-muted">It's tested against one. On a 15-table app built with Lovable, all 100 checks matched a real local Supabase.</p>
+        </div>
+      </section>
+
+      <section id="developers" class="mt-24 border-t-2 border-text pt-10">
+        <h2 class="text-[clamp(1.8rem,3.6vw,2.6rem)] leading-tight font-extrabold text-ink [font-stretch:120%]">For developers</h2>
+        <p class="mt-3 max-w-[60ch] text-muted">The same inspection runs from the command line, in CI on every pull request, and as a tool your AI agent calls itself.</p>
+        <div class="mt-8 grid gap-8 md:grid-cols-3">
+          <div class="min-w-0">
+            <h3 class="font-bold">Command line</h3>
+            <pre class="codebox">npx rls-probe .</pre>
+            <p class="text-[0.95rem] text-muted">Add <code>--prompt</code> for an AI builder, <code>--fix</code> for the October 30 grants.</p>
+          </div>
+          <div class="min-w-0">
+            <h3 class="font-bold">GitHub Action</h3>
+            <pre class="codebox">- uses: zkousama/rls-probe@v0</pre>
+            <p class="text-[0.95rem] text-muted">Fails the build when a migration opens data.</p>
+          </div>
+          <div class="min-w-0">
+            <h3 class="font-bold">Claude Code and MCP</h3>
+            <pre class="codebox">/plugin install rls-probe --marketplace zkousama/rls-probe</pre>
+            <p class="text-[0.95rem] text-muted">Or <code>npx rls-probe mcp</code> in Cursor, Windsurf or Claude Desktop.</p>
+          </div>
+        </div>
+      </section>
+
+      <footer class="mt-24 border-t border-rule pt-6 text-[0.9rem] text-muted">
+        <p>rls-probe {pkg.version}, open source under the MIT license. <a class="underline underline-offset-4" href={repo}>Source on GitHub</a>, <a class="underline underline-offset-4" href="https://www.npmjs.com/package/rls-probe">package on npm</a>.</p>
+        <p class="mt-1">Not affiliated with Supabase, Lovable or Bolt.</p>
+      </footer>
+    </main>
+
+    <script>
+      import "../scripts/app.js";
+    </script>
+  </body>
+</html>
+
+<style is:global>
+  .tab { position: relative; padding-left: 1.6rem; font-weight: 600; color: var(--color-muted); cursor: pointer; }
+  .tab::before { content: ""; position: absolute; left: 0; top: 50%; width: 1.05rem; height: 1.05rem; margin-top: -0.53rem; border: 2px solid var(--color-muted); border-radius: 50%; background: #fff; }
+  .tab[aria-selected="true"] { color: var(--color-text); }
+  .tab[aria-selected="true"]::before { border-color: var(--color-ink); background: radial-gradient(circle, var(--color-ink) 0 0.27rem, #fff 0.3rem); }
+  #drop.over { border-color: var(--color-ink); background: var(--color-ink-soft); }
+</style>

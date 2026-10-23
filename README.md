@@ -11,6 +11,10 @@ other user. Nothing touches a live database.
 npx rls-probe path/to/your-app
 ```
 
+Or in your browser, with nothing to install: **[zkousama.github.io/rls-probe](https://zkousama.github.io/rls-probe/)**.
+Paste a GitHub link, or drop the project folder or its ZIP. It runs on your computer, so
+nothing is uploaded.
+
 It reads `supabase/migrations/*.sql` (or `migrations/`, a folder of `.sql`
 files, or one `.sql` file) and, when it's pointed at the app itself, scans the
 code too. The report starts in plain words:
@@ -78,7 +82,7 @@ In Cursor, Windsurf, Claude Desktop or any other MCP client, add the server:
 ```json
 {
   "mcpServers": {
-    "rls-probe": { "command": "npx", "args": ["-y", "rls-probe@0.4.0", "mcp"] }
+    "rls-probe": { "command": "npx", "args": ["-y", "rls-probe@0.5.0", "mcp"] }
   }
 }
 ```

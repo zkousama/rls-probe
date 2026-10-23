@@ -1,0 +1,138 @@
+@import "tailwindcss";
+@import "@fontsource-variable/archivo/wdth.css";
+
+/* Inspection paperwork: form paper, ballpoint ink, a rubber stamp, a carbon copy. */
+@theme {
+  --font-sans: "Archivo Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --color-paper: #fbfbf8;
+  --color-ink: #1d3b8c;
+  --color-ink-soft: #e8edf8;
+  --color-text: #1b1f27;
+  --color-muted: #5b6372;
+  --color-rule: #c9ced6;
+  --color-stamp: #c2142d;
+  --color-stamp-soft: #fbe8eb;
+  --color-carbon: #fff3b8;
+  --color-carbon-edge: #e9d98a;
+  --color-pass: #1f7a4d;
+  --color-pass-soft: #e3f3ea;
+  --color-amber: #b45a00;
+  --color-amber-soft: #fdf0dc;
+}
+
+@layer base {
+  html { font-family: var(--font-sans); color: var(--color-text); background: var(--color-paper); }
+  body { font-size: 1.0625rem; line-height: 1.6; -webkit-font-smoothing: antialiased; }
+  ::selection { background: var(--color-carbon); }
+  :focus-visible { outline: 3px solid var(--color-ink); outline-offset: 2px; }
+  code { font-family: var(--font-mono); font-size: 0.88em; }
+}
+
+@layer components {
+  /* The grade card, like the one in a restaurant window: the page's one loud thing. */
+  .placard {
+    --grade: var(--color-ink);
+    display: inline-grid;
+    justify-items: center;
+    gap: 2px;
+    padding: 14px 18px 12px;
+    background: #fff;
+    border: 3px solid var(--grade);
+    box-shadow: inset 0 0 0 5px #fff, inset 0 0 0 7px var(--grade);
+    border-radius: 6px;
+    color: var(--grade);
+    text-align: center;
+  }
+  .placard .p-title { font-size: 0.8rem; font-weight: 700; font-stretch: 112%; letter-spacing: 0.01em; }
+  .placard .p-letter { font-size: 6.5rem; line-height: 0.95; font-weight: 900; font-stretch: 125%; }
+  .placard .p-sub { font-size: 0.75rem; color: var(--color-muted); }
+  .placard-lg { padding: 20px 28px 16px; }
+  .placard-lg .p-title { font-size: 0.95rem; }
+  .placard-lg .p-letter { font-size: clamp(7rem, 13vw, 10.5rem); }
+  .placard-lg .p-sub { font-size: 0.85rem; }
+  .placard.grade-A { --grade: var(--color-ink); }
+  .placard.grade-B { --grade: var(--color-pass); }
+  .placard.grade-C { --grade: var(--color-amber); }
+  .placard.grade-D { --grade: #c2410c; }
+  .placard.grade-F { --grade: var(--color-stamp); }
+  .placard.grade-none { --grade: var(--color-muted); }
+  .placard.stamp { animation: stamp 0.32s cubic-bezier(0.2, 0.9, 0.3, 1.2) both; }
+  @keyframes stamp {
+    from { transform: scale(1.35) rotate(-7deg); opacity: 0; }
+    to { transform: scale(1) rotate(-2deg); opacity: 1; }
+  }
+
+  /* The result: a carbon-copy slip, torn off along the top. */
+  .slip { background: #fff; border: 1px solid var(--color-rule); border-radius: 4px; }
+  .slip-head {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 28px;
+    align-items: center;
+    padding: 28px;
+    background: var(--color-carbon);
+    border-bottom: 1px solid var(--color-carbon-edge);
+    background-image: radial-gradient(circle at 7px 0, var(--color-paper) 4px, transparent 4.5px);
+    background-size: 14px 8px;
+    background-repeat: repeat-x;
+  }
+  .slip-section { padding: 26px 28px; border-top: 1px solid var(--color-rule); }
+  .slip-section:first-of-type { border-top: 0; }
+  .slip-section h3 { font-size: 1.15rem; font-weight: 700; font-stretch: 110%; color: var(--color-ink); margin-bottom: 4px; }
+
+  .finding { display: grid; grid-template-columns: 6.5rem 1fr; gap: 6px 16px; padding: 14px 0; border-top: 1px dashed var(--color-rule); }
+  .finding:first-child { border-top: 0; }
+  .sev { font-weight: 700; font-size: 0.95rem; }
+  .sev-critical { color: var(--color-stamp); }
+  .sev-high { color: #c2410c; }
+  .sev-medium { color: var(--color-amber); }
+  .sev-review { color: var(--color-ink); }
+  .finding summary { cursor: pointer; color: var(--color-ink); font-weight: 600; font-size: 0.95rem; width: fit-content; }
+  .finding summary:hover { text-decoration: underline; }
+  .finding .ask { margin-top: 8px; padding: 10px 14px; border-left: 3px solid var(--color-ink); background: var(--color-ink-soft); font-size: 0.97rem; }
+
+  /* The access checklist: one row per table, a mark per thing tried. */
+  .checklist { width: 100%; border-collapse: collapse; font-size: 0.93rem; min-width: 600px; }
+  .checklist th { font-weight: 600; color: var(--color-muted); font-size: 0.85rem; padding: 6px 4px; text-align: center; }
+  .checklist th.who { color: var(--color-text); font-weight: 700; border-bottom: 2px solid var(--color-text); }
+  .checklist td { padding: 8px 4px; text-align: center; border-top: 1px solid var(--color-rule); }
+  .checklist td.table-name { text-align: left; font-family: var(--font-mono); font-size: 0.86rem; padding-right: 16px; white-space: nowrap; }
+  .checklist .gap { border-left: 2px solid var(--color-text); }
+  .checklist .flag { margin-left: 8px; font-family: var(--font-sans); font-size: 0.75rem; font-weight: 700; color: var(--color-stamp); }
+  .checklist .flag.shared { color: var(--color-muted); font-weight: 600; }
+  .mark { display: inline-block; width: 1.4rem; font-weight: 800; font-size: 1.05rem; line-height: 1; }
+  .mark-reached { color: var(--color-stamp); }
+  .mark-public { color: var(--color-ink); }
+  .mark-blocked { color: var(--color-rule); }
+
+  .codebox { margin: 12px 0; padding: 14px 16px; background: var(--color-paper); border: 1px solid var(--color-rule); border-radius: 4px; overflow-x: auto; font-family: var(--font-mono); font-size: 0.82rem; line-height: 1.55; white-space: pre; }
+
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 3rem; padding: 0 1.25rem; border-radius: 6px; font-weight: 700; font-stretch: 108%; white-space: nowrap; cursor: pointer; }
+  .btn-ink { background: var(--color-ink); color: #fff; }
+  .btn-ink:hover { background: #162e70; }
+  .btn-line { border: 2px solid var(--color-text); color: var(--color-text); background: #fff; }
+  .btn-line:hover { background: var(--color-paper); }
+  .btn:disabled { opacity: 0.55; cursor: progress; }
+
+  .steps li { display: grid; grid-template-columns: 1.6rem 1fr; align-items: baseline; color: var(--color-muted); }
+  .steps li::before { content: "☐"; color: var(--color-rule); font-size: 1.05rem; }
+  .steps li.done { color: var(--color-text); }
+  .steps li.done::before { content: "☑"; color: var(--color-ink); }
+  .steps li.now { color: var(--color-text); font-weight: 650; }
+  .steps li.now::before { content: "☐"; color: var(--color-ink); animation: blink 1s steps(2, start) infinite; }
+  @keyframes blink { to { visibility: hidden; } }
+}
+
+/* Phones: the card above the verdict, severity above each finding. */
+@media (max-width: 640px) {
+  .slip-head { grid-template-columns: 1fr; gap: 20px; padding: 22px 18px; }
+  .slip-head .placard { justify-self: start; }
+  .slip-head .placard .p-letter { font-size: 4.75rem; }
+  .slip-section { padding: 22px 18px; }
+  .finding { grid-template-columns: 1fr; gap: 2px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}

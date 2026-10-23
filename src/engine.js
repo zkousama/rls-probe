@@ -13,10 +13,14 @@ import { scanCode } from "./static.js";
 // explicitGrants: for --oct30 with the old grants, a function the caller started
 // early (a worker in Node) that takes the findings and returns the grants report;
 // without one, the second database is built here, after the first is closed.
-export async function runProbe({ migrations, code = [], grants = "legacy", oct30 = false, snapshot, explicitGrants }) {
+// onProgress: told each step as it starts ("migrations", "seed", "probe", "grants").
+export async function runProbe({ migrations, code = [], grants = "legacy", oct30 = false, snapshot, explicitGrants, onProgress = () => {} }) {
+  onProgress("migrations");
   const load = await loadDatabase(migrations, { grants, snapshot });
   const tables = await readSchema(load.db);
+  onProgress("seed");
   const { known, problems } = await seed(load.db, tables);
+  onProgress("probe");
   const results = await probeTables(load.db, tables, known);
   const views = await probeViews(load.db, tables);
   const functions = await readFunctions(load.db);
@@ -41,6 +45,7 @@ export async function runProbe({ migrations, code = [], grants = "legacy", oct30
     policies: byTable(policies),
     createdAt: locate(migrations),
   };
+  if (oct30) onProgress("grants");
   if (oct30 && grants === "explicit") report.grantsChange = await grantsReport(load.db, findings);
   await load.db.close().catch(() => {});
   if (oct30 && grants === "legacy") {

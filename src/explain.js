@@ -10,6 +10,7 @@ export function explain(report) {
   const items = report.findings.map((f) => ({ severity: f.severity, where: f.where, ...say(f, report) }));
   const g = report.grantsChange;
   return {
+    grade: grade(report),
     verdict: verdict(report),
     problems: items.filter((i) => i.severity !== "review"),
     notes: items.filter((i) => i.severity === "review"),
@@ -18,10 +19,24 @@ export function explain(report) {
   };
 }
 
+// A letter grade anyone reads at a glance: F with any critical problem, D with a
+// high one, C with a medium one, B with only things to check, grants to add or
+// tables it couldn't see, A when clean. Null when nothing was checked.
+export function grade(report) {
+  if (!report.results.length) return null;
+  const has = (severity) => report.findings.some((f) => f.severity === severity);
+  if (has("critical")) return "F";
+  if (has("high")) return "D";
+  if (has("medium")) return "C";
+  const g = report.grantsChange;
+  const grants = g && (g.breaks.length || g.server.length || g.unsafe.length || g.closedNoRls.length);
+  return has("review") || grants || report.load.missing?.length ? "B" : "A";
+}
+
 // The text the CLI prints first, before the details.
 export function renderPlain(report) {
   const e = explain(report);
-  const out = [`rls-probe: ${e.verdict}`, ""];
+  const out = [`rls-probe: ${e.grade ? `grade ${e.grade}. ` : ""}${capitalize(e.verdict)}`, ""];
   for (const p of e.problems) out.push(`  ${LABEL[p.severity].padEnd(8)}  ${p.headline}`);
   if (e.problems.length) out.push("");
   if (e.notes.length) {
@@ -62,7 +77,7 @@ export function fixPrompt(report) {
 // For GitHub's job summary and pull requests, and for AI agents.
 export function renderMarkdown(report, details = "") {
   const e = explain(report);
-  const out = [`### rls-probe: ${e.verdict}`, ""];
+  const out = [`### rls-probe: ${e.grade ? `grade ${e.grade}. ` : ""}${capitalize(e.verdict)}`, ""];
   if (e.problems.length || e.notes.length) {
     out.push("| | Problem | Where |", "|---|---|---|");
     for (const p of [...e.problems, ...e.notes]) out.push(`| ${LABEL[p.severity]} | ${p.headline} | \`${p.where}\` |`);
@@ -94,10 +109,10 @@ function grantsPart(g) {
   const parts = [];
   if (stop) parts.push(`${stop} table${stop === 1 ? "" : "s"} will answer "permission denied" to your users in a fresh database until they're granted access${g.breaks.length ? `; ${g.breaks.length} ${g.breaks.length === 1 ? "is" : "are"} safe to grant now` : ""}${holdBack.length ? `, and ${list(holdBack, "and")} must be fixed first` : ""}.`);
   if (g.server.length) parts.push(`Your edge functions and server code need grants on ${g.server.length} table${g.server.length === 1 ? "" : "s"} too.`);
-  const headline = parts.length
-    ? `After October 30: ${parts.join(" ")} Run rls-probe with --fix to write the safe grants as a migration.`
-    : "After October 30: every table already has the grants it needs.";
-  return { headline, lines, holdBack };
+  // summary: what changes, said anywhere; headline adds how to act from the command line.
+  const summary = parts.length ? parts.join(" ") : "Every table already has the grants it needs.";
+  const headline = `After October 30: ${summary}${parts.length ? " Run rls-probe with --fix to write the safe grants as a migration." : ""}`;
+  return { headline, summary, lines, holdBack };
 }
 
 // The headline and the ask for one finding.
@@ -220,6 +235,10 @@ function serviceRoleHint(policies, actions, role) {
   const one = meant.length === 1;
   const text = `${one ? "The policy" : "The policies"} ${list(meant.map((p) => `"${p.name}"`), "and")} ${one ? "is" : "are"} named for the service role but ${one ? "applies" : "apply"} to everyone. The service role skips row-level security anyway, so drop ${one ? "it" : "them"}, or add "to service_role".`;
   return { text: meant.length === atFault.length ? text : `${text} `, all: meant.length === atFault.length };
+}
+
+function capitalize(text) {
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 function human(column) {

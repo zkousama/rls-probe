@@ -188,7 +188,7 @@ function runText(target, ...flags) {
 
 test("the plain summary leads with what someone who doesn't read SQL needs", () => {
   const out = runText(leaky, "--oct30");
-  assert.match(out, /^rls-probe: 6 problems to fix \(5 tables checked\)\./);
+  assert.match(out, /^rls-probe: grade F\. 6 problems to fix \(5 tables checked\)\./);
   assert.match(out, /CRITICAL {2}Anyone on the internet can see, change, delete and add every row in the orders table\./);
   assert.match(out, /HIGH {6}Anyone on the internet can see your users' profiles, including email\./);
   assert.match(out, /run rls-probe with --prompt/);

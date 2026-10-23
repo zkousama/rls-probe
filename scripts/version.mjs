@@ -12,7 +12,8 @@ const write = (file, text) => fs.writeFileSync(new URL(file, root), text);
 const PLACES = [
   ["package.json", /^  "version": "([^"]+)"/m],
   ["plugin/.claude-plugin/plugin.json", /^  "version": "([^"]+)"/m],
-  ["plugin/.mcp.json", /rls-probe@(\d+\.\d+\.\d+[\w.-]*)/g],
+  // The plugin's MCP server lives in plugin.json: a .mcp.json is often in global git ignores.
+  ["plugin/.claude-plugin/plugin.json", /rls-probe@(\d+\.\d+\.\d+[\w.-]*)/g],
   ["plugin/skills/supabase-security/SKILL.md", /rls-probe@(\d+\.\d+\.\d+[\w.-]*)/g],
   ["README.md", /rls-probe@(\d+\.\d+\.\d+[\w.-]*)/g],
 ];

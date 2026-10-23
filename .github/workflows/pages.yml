@@ -1,0 +1,41 @@
+name: site
+
+# Publishes the web page (site/) to GitHub Pages with each release, so the page
+# runs the version that's on npm. Run it by hand to publish without a release.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      # No dependency's install script runs in a job that can publish the site.
+      - run: npm install --no-audit --no-fund --ignore-scripts
+      - run: npm ci --prefix site --no-audit --no-fund --ignore-scripts
+      - run: npm run --prefix site build
+        env:
+          SITE_BASE: /rls-probe/
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v5

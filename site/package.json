@@ -1,0 +1,17 @@
+{
+  "name": "rls-probe-site",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "snapshot": "node ../scripts/site-snapshot.mjs",
+    "dev": "npm run snapshot && astro dev",
+    "build": "npm run snapshot && astro build",
+    "preview": "astro preview"
+  },
+  "devDependencies": {
+    "@fontsource-variable/archivo": "5.3.0",
+    "@tailwindcss/vite": "4.3.3",
+    "astro": "7.4.2",
+    "tailwindcss": "4.3.3"
+  }
+}

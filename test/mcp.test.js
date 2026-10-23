@@ -42,7 +42,8 @@ test("the MCP server starts, lists its tools and checks an app", async () => {
   assert.deepEqual(tools.result.tools.map((t) => t.name), ["check_supabase_security", "write_supabase_grants_migration"]);
   const check = await mcp.request("tools/call", { name: "check_supabase_security", arguments: { path: "leaky" } });
   assert.equal(check.result.isError, false);
-  assert.match(check.result.content[0].text, /^rls-probe: 6 problems to fix/);
+  assert.match(check.result.content[0].text, /^rls-probe: grade F\. 6 problems to fix/);
+  assert.equal(check.result.structuredContent.grade, "F");
   assert.match(check.result.content[0].text, /## What to change/);
   assert.equal(check.result.structuredContent.exitCode, 1);
   const missing = await mcp.request("tools/call", { name: "check_supabase_security", arguments: { path: "nowhere" } });

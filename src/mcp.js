@@ -89,7 +89,7 @@ async function call(name, { path: target = "." }) {
     const r = run.report;
     const e = explain(r);
     const text = [
-      `rls-probe: ${e.verdict}`,
+      `rls-probe: ${e.grade ? `grade ${e.grade}. ` : ""}${e.verdict.charAt(0).toUpperCase()}${e.verdict.slice(1)}`,
       "",
       ...[...e.problems, ...e.notes].map((p) => `- ${p.severity.toUpperCase()}: ${p.headline}`),
       e.grants ? `\n${e.grants.headline}` : "",
@@ -103,7 +103,7 @@ async function call(name, { path: target = "." }) {
       "",
       renderText(r) + (r.grantsChange ? renderGrants(r.grantsChange) : ""),
     ].join("\n");
-    return { content: [{ type: "text", text }], structuredContent: { verdict: e.verdict, exitCode: run.code, problems: e.problems, notes: e.notes }, isError: false };
+    return { content: [{ type: "text", text }], structuredContent: { grade: e.grade, verdict: e.verdict, exitCode: run.code, problems: e.problems, notes: e.notes }, isError: false };
   }
   if (name === "write_supabase_grants_migration") {
     const run = await probe(target, ["--fix", "--json"]);

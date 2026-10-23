@@ -25,7 +25,8 @@ jobs:
       - run: npm install -g npm@11.8.0
       - name: Every version names the tag
         run: node scripts/version.mjs check "$GITHUB_REF_NAME"
-      - run: npm install --no-audit --no-fund
+      # No dependency's install script runs in the job that can publish.
+      - run: npm install --no-audit --no-fund --ignore-scripts
       - run: npm test
       - run: npm publish
       - name: Move the major tag the GitHub Action is used by
