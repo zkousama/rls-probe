@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { explain } from "../src/explain.js";
 import { splitStatements } from "../src/split.js";
 
 const cli = fileURLToPath(new URL("../src/cli.js", import.meta.url));
@@ -222,4 +223,28 @@ test("a single .sql file, such as the output of supabase db dump, is probed on i
   assert.equal(Object.fromEntries(report.results.map((r) => [r.table, r])).orders.anon.read, 1);
   const sarif = JSON.parse(runText(dump, "--sarif"));
   assert.ok(sarif.runs[0].results.every((r) => !r.locations[0].physicalLocation.artifactLocation.uri.includes("..")));
+});
+
+test("Supabase's newer sb_secret_ keys are caught in the code, like service role keys", () => {
+  assert.ok(messyFindings.includes("critical src/admin.ts:1: Supabase secret key in the code"));
+});
+
+// Advice that only looks right is how "revoke from anon" shipped while public could still
+// run the function. Each do-it-yourself fix is applied as a migration and probed again.
+test("the do-it-yourself fixes close what they say they close, and owners keep their rows", () => {
+  const before = run(leaky).report;
+  const sql = explain(before).problems.concat(explain(before).notes).filter((p) => p.selfFix?.where === "SQL Editor").map((p) => p.selfFix.code);
+  assert.ok(sql.length >= 3);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rls-probe-selffix-"));
+  fs.cpSync(leaky, dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "supabase", "migrations", "99999999999999_fixes.sql"), sql.join("\n"));
+  const after = run(dir).report;
+  const left = after.findings.map((f) => `${f.kind} ${f.where}`);
+  for (const gone of ["rls-off orders", "definer-function", "view-bypass", "public-bucket"]) {
+    assert.ok(!left.some((k) => k.startsWith(gone)), `${gone} is fixed`);
+  }
+  const orders = after.results.find((r) => r.table === "orders");
+  assert.equal(orders.B.read, 0, "another user no longer reads the orders");
+  assert.ok(orders.A.read > 0 && orders.A.update && orders.A.insert, "the owner still reads, edits and adds their own");
+  fs.rmSync(dir, { recursive: true, force: true });
 });

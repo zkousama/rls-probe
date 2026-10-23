@@ -1,7 +1,7 @@
 ---
 name: supabase-security
 description: Check a Supabase app's database security with rls-probe and fix what it finds. Use after creating or changing anything in supabase/migrations, before deploying, when asked whether a Supabase, Lovable or Bolt app is secure, or when the app gets "permission denied" (42501) after Supabase's October 2026 grants change.
-allowed-tools: Bash(npx -y rls-probe@0.5.0 *)
+allowed-tools: Bash(npx -y rls-probe@0.5.1 *)
 ---
 
 # Checking a Supabase app with rls-probe
@@ -16,7 +16,7 @@ functions.
 Use the `check_supabase_security` tool from this plugin's MCP server. Without it, run:
 
 ```sh
-npx -y rls-probe@0.5.0 <app folder> --oct30
+npx -y rls-probe@0.5.1 <app folder> --oct30
 ```
 
 The app folder is the one holding `supabase/migrations` (usually the project root).
@@ -25,7 +25,7 @@ to check (no migrations, or no tables in them).
 
 ## Fix
 
-- Get the exact changes with `npx -y rls-probe@0.5.0 <app folder> --prompt`. It names
+- Get the exact changes with `npx -y rls-probe@0.5.1 <app folder> --prompt`. It names
   the app's own policies and owner columns.
 - Put every change in a **new** migration file in `supabase/migrations`. Never edit a
   migration that has already run.

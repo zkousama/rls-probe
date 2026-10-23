@@ -19,6 +19,48 @@
   --color-pass-soft: #e3f3ea;
   --color-amber: #b45a00;
   --color-amber-soft: #fdf0dc;
+  --color-orange: #c2410c;
+  --color-surface: #ffffff;
+  --color-faint: #c9ced6;
+  --color-on-ink: #ffffff;
+  --color-ink-hover: #162e70;
+}
+
+/* At night the paperwork stays paperwork: the page turns ballpoint navy, the
+   ink lightens, and the grade card stays a lit card, like a window placard. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-paper: #121a33;
+    --color-surface: #18213f;
+    --color-ink: #a9bcff;
+    --color-ink-soft: #1f2a52;
+    --color-ink-hover: #c4d1ff;
+    --color-on-ink: #0e1630;
+    --color-text: #e8ebf3;
+    --color-muted: #a4acc2;
+    --color-rule: #2e3960;
+    --color-faint: #4c5884;
+    --color-stamp: #ff7486;
+    --color-stamp-soft: #3b1a28;
+    --color-carbon: #2e2914;
+    --color-carbon-edge: #574d22;
+    --color-pass: #6bd6a2;
+    --color-pass-soft: #163527;
+    --color-amber: #f4b13e;
+    --color-amber-soft: #3a2c12;
+    --color-orange: #ff9b5e;
+  }
+}
+
+/* The grade card keeps its print colours in both themes. */
+:root {
+  --grade-a: #1d3b8c;
+  --grade-b: #1f7a4d;
+  --grade-c: #b45a00;
+  --grade-d: #c2410c;
+  --grade-f: #c2142d;
+  --card: #fffdf6;
+  color-scheme: light dark;
 }
 
 @layer base {
@@ -32,31 +74,31 @@
 @layer components {
   /* The grade card, like the one in a restaurant window: the page's one loud thing. */
   .placard {
-    --grade: var(--color-ink);
+    --grade: var(--grade-a);
     display: inline-grid;
     justify-items: center;
     gap: 2px;
     padding: 14px 18px 12px;
-    background: #fff;
+    background: var(--card);
     border: 3px solid var(--grade);
-    box-shadow: inset 0 0 0 5px #fff, inset 0 0 0 7px var(--grade);
+    box-shadow: inset 0 0 0 5px var(--card), inset 0 0 0 7px var(--grade);
     border-radius: 6px;
     color: var(--grade);
     text-align: center;
   }
   .placard .p-title { font-size: 0.8rem; font-weight: 700; font-stretch: 112%; letter-spacing: 0.01em; }
   .placard .p-letter { font-size: 6.5rem; line-height: 0.95; font-weight: 900; font-stretch: 125%; }
-  .placard .p-sub { font-size: 0.75rem; color: var(--color-muted); }
+  .placard .p-sub { font-size: 0.75rem; color: #5b6372; }
   .placard-lg { padding: 20px 28px 16px; }
   .placard-lg .p-title { font-size: 0.95rem; }
   .placard-lg .p-letter { font-size: clamp(7rem, 13vw, 10.5rem); }
   .placard-lg .p-sub { font-size: 0.85rem; }
-  .placard.grade-A { --grade: var(--color-ink); }
-  .placard.grade-B { --grade: var(--color-pass); }
-  .placard.grade-C { --grade: var(--color-amber); }
-  .placard.grade-D { --grade: #c2410c; }
-  .placard.grade-F { --grade: var(--color-stamp); }
-  .placard.grade-none { --grade: var(--color-muted); }
+  .placard.grade-A { --grade: var(--grade-a); }
+  .placard.grade-B { --grade: var(--grade-b); }
+  .placard.grade-C { --grade: var(--grade-c); }
+  .placard.grade-D { --grade: var(--grade-d); }
+  .placard.grade-F { --grade: var(--grade-f); }
+  .placard.grade-none { --grade: #5b6372; }
   .placard.stamp { animation: stamp 0.32s cubic-bezier(0.2, 0.9, 0.3, 1.2) both; }
   @keyframes stamp {
     from { transform: scale(1.35) rotate(-7deg); opacity: 0; }
@@ -64,7 +106,7 @@
   }
 
   /* The result: a carbon-copy slip, torn off along the top. */
-  .slip { background: #fff; border: 1px solid var(--color-rule); border-radius: 4px; }
+  .slip { background: var(--color-surface); border: 1px solid var(--color-rule); border-radius: 4px; }
   .slip-head {
     display: grid;
     grid-template-columns: auto 1fr;
@@ -85,7 +127,7 @@
   .finding:first-child { border-top: 0; }
   .sev { font-weight: 700; font-size: 0.95rem; }
   .sev-critical { color: var(--color-stamp); }
-  .sev-high { color: #c2410c; }
+  .sev-high { color: var(--color-orange); }
   .sev-medium { color: var(--color-amber); }
   .sev-review { color: var(--color-ink); }
   .finding summary { cursor: pointer; color: var(--color-ink); font-weight: 600; font-size: 0.95rem; width: fit-content; }
@@ -104,19 +146,19 @@
   .mark { display: inline-block; width: 1.4rem; font-weight: 800; font-size: 1.05rem; line-height: 1; }
   .mark-reached { color: var(--color-stamp); }
   .mark-public { color: var(--color-ink); }
-  .mark-blocked { color: var(--color-rule); }
+  .mark-blocked { color: var(--color-faint); }
 
   .codebox { margin: 12px 0; padding: 14px 16px; background: var(--color-paper); border: 1px solid var(--color-rule); border-radius: 4px; overflow-x: auto; font-family: var(--font-mono); font-size: 0.82rem; line-height: 1.55; white-space: pre; }
 
   .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 3rem; padding: 0 1.25rem; border-radius: 6px; font-weight: 700; font-stretch: 108%; white-space: nowrap; cursor: pointer; }
-  .btn-ink { background: var(--color-ink); color: #fff; }
-  .btn-ink:hover { background: #162e70; }
-  .btn-line { border: 2px solid var(--color-text); color: var(--color-text); background: #fff; }
+  .btn-ink { background: var(--color-ink); color: var(--color-on-ink); }
+  .btn-ink:hover { background: var(--color-ink-hover); }
+  .btn-line { border: 2px solid var(--color-text); color: var(--color-text); background: var(--color-surface); }
   .btn-line:hover { background: var(--color-paper); }
   .btn:disabled { opacity: 0.55; cursor: progress; }
 
   .steps li { display: grid; grid-template-columns: 1.6rem 1fr; align-items: baseline; color: var(--color-muted); }
-  .steps li::before { content: "☐"; color: var(--color-rule); font-size: 1.05rem; }
+  .steps li::before { content: "☐"; color: var(--color-faint); font-size: 1.05rem; }
   .steps li.done { color: var(--color-text); }
   .steps li.done::before { content: "☑"; color: var(--color-ink); }
   .steps li.now { color: var(--color-text); font-weight: 650; }

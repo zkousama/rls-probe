@@ -1,6 +1,6 @@
 {
   "name": "rls-probe",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Checks a Supabase app's row-level security, grants and leaked keys by running its migrations offline, and tells you what to fix.",
   "author": {
     "name": "Ousama Ajebbar"
@@ -21,7 +21,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "rls-probe@0.5.0",
+        "rls-probe@0.5.1",
         "mcp"
       ]
     }

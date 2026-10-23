@@ -7,7 +7,7 @@ const CMD = { read: "SELECT", update: "UPDATE", delete: "DELETE", insert: "INSER
 const LABEL = { critical: "CRITICAL", high: "HIGH", medium: "MEDIUM", review: "CHECK" };
 
 export function explain(report) {
-  const items = report.findings.map((f) => ({ severity: f.severity, where: f.where, ...say(f, report) }));
+  const items = report.findings.map((f) => ({ severity: f.severity, where: f.where, ...say(f, report), selfFix: selfFix(f, report) }));
   const g = report.grantsChange;
   return {
     grade: grade(report),
@@ -175,7 +175,7 @@ function say(f, report) {
     case "definer-function":
       return {
         headline: `The database function ${f.function}() runs with full rights, and ${f.callers === "anyone" ? "anyone on the internet" : "any signed-in user"} can call it${f.writes ? " to change data" : ""}.`,
-        ask: `In ${f.function}, check that the caller is allowed (with auth.uid()) before it reads or changes anything, or stop ${f.callers === "anyone" ? "visitors" : "users"} calling it: revoke execute on function public.${t} from ${f.callers === "anyone" ? "anon, authenticated" : "authenticated"};`,
+        ask: `In ${f.function}, check that the caller is allowed (with auth.uid()) before it reads or changes anything, or stop ${f.callers === "anyone" ? "visitors and users" : "users"} calling it: revoke execute on function public.${t} from public, anon, authenticated; (revoking only from anon isn't enough: Postgres lets public run every function).`,
       };
     case "public-bucket":
       return {
@@ -184,8 +184,8 @@ function say(f, report) {
       };
     case "service-key":
       return {
-        headline: `Your secret Supabase key (the service role key) is in your app's code at ${t}, so anyone can copy it and skip every rule.`,
-        ask: `Remove the service role key from ${t}. Anything that needs it must run in a Supabase edge function, never in the browser. Then rotate the key in the Supabase dashboard (Project Settings, API keys), because it has already been exposed.`,
+        headline: `Your secret Supabase key (${f.key === "secret" ? "an sb_secret_ key" : "the service role key"}) is in your app's code at ${t}, so anyone can copy it and skip every rule.`,
+        ask: `Remove the key from ${t}. Anything that needs it must run in a Supabase edge function, never in the browser. Then replace the key, because it has already been exposed.`,
       };
     case "secret":
       return {
@@ -203,6 +203,39 @@ function say(f, report) {
         : { headline: `The edge function ${f.function} can be run by anyone on the internet.`, ask: `In the edge function ${f.function}, check who's calling before doing anything: verify the user's token, or the webhook's signature.` };
     default:
       return { headline: `${f.title} (${t}).`, ask: f.fix ?? f.detail };
+  }
+}
+
+// For people who run their own Supabase project: the change as a step they can take
+// themselves. Only for fixes that are a single safe statement or setting; changing
+// what a policy allows is left to the request above. (Lovable Cloud projects have no
+// Supabase dashboard, so the request stays the main path.)
+function selfFix(f, report) {
+  const t = f.where;
+  switch (f.kind) {
+    case "rls-off":
+    case "rls-off-users": {
+      const route = report.results.find((r) => r.table === t)?.ownedThrough;
+      const owner = route?.length === 1 ? route[0].column : null;
+      return {
+        where: "SQL Editor",
+        code: owner
+          ? `alter table public.${t} enable row level security;\ncreate policy "Owners manage their rows" on public.${t} for all to authenticated\n  using (${owner} = (select auth.uid())) with check (${owner} = (select auth.uid()));`
+          : `alter table public.${t} enable row level security;\n-- Then add policies for who may read and change it: until then, nobody can.`,
+      };
+    }
+    case "view-bypass":
+      return { where: "SQL Editor", code: `alter view public.${t} set (security_invoker = true);` };
+    case "definer-function":
+      return { where: "SQL Editor", code: `revoke execute on function public.${t} from public, anon, authenticated;` };
+    case "public-bucket":
+      return { where: "SQL Editor", code: `update storage.buckets set public = false where id = '${f.bucket.replace(/'/g, "''")}';` };
+    case "service-key":
+      return { where: "Settings → API Keys", code: "Create a new secret key, put it wherever your server code used the old one, then delete the old secret key (or deactivate a legacy service_role key)." };
+    case "open-function":
+      return f.severity === "review" ? null : { where: "supabase/config.toml", code: `# Under [functions.${f.function}], remove this line, then deploy the function again:\nverify_jwt = false` };
+    default:
+      return null;
   }
 }
 

@@ -289,7 +289,7 @@ function show(report, project) {
       el("span", { className: `sev sev-${p.severity}` }, SEVERITY[p.severity]),
       el("div", {},
         el("p", { className: "font-semibold" }, p.headline),
-        el("details", { className: "mt-1.5" }, el("summary", {}, "What to change"), el("p", { className: "ask" }, p.ask)),
+        el("details", { className: "mt-1.5" }, el("summary", {}, "What to change"), el("p", { className: "ask" }, p.ask), ...yourself(p)),
       ),
     )))));
   }
@@ -302,7 +302,7 @@ function show(report, project) {
   if (e.notes.length) {
     sections.push(section("Worth checking", "Fine if they're on purpose.", el("div", {}, ...e.notes.map((n) => el("div", { className: "finding" },
       el("span", { className: "sev sev-review" }, "Check"),
-      el("div", {}, el("p", {}, n.headline), el("details", { className: "mt-1.5" }, el("summary", {}, "If it isn't on purpose"), el("p", { className: "ask" }, n.ask))),
+      el("div", {}, el("p", {}, n.headline), el("details", { className: "mt-1.5" }, el("summary", {}, "If it isn't on purpose"), el("p", { className: "ask" }, n.ask), ...yourself(n))),
     )))));
   }
   if (e.missing.length) {
@@ -358,6 +358,18 @@ function checklist(report) {
       el("span", {}, el("span", { className: "mark mark-blocked" }, "✓"), "blocked"),
     ),
   );
+}
+
+// The same change as a step to take yourself, for people who run their own Supabase
+// project (a Lovable Cloud project has no Supabase dashboard).
+function yourself(item) {
+  if (!item.selfFix) return [];
+  const where = item.selfFix.where === "SQL Editor" ? "in the SQL Editor, run" : `in ${item.selfFix.where}`;
+  return [
+    el("p", { className: "mt-3 text-[0.92rem] text-muted" }, `Or, if you manage your own Supabase project, ${where}:`),
+    el("pre", { className: "codebox" }, item.selfFix.code),
+    copyButton("Copy", item.selfFix.code, "btn btn-line h-9 px-3 text-[0.9rem]"),
+  ];
 }
 
 function section(title, lead, ...body) {

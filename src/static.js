@@ -37,8 +37,12 @@ export function scanCode(files) {
       for (const jwt of line.match(/eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g) ?? []) {
         const role = jwtRole(jwt);
         if (role === "service_role") {
-          findings.push({ kind: "service-key", severity: "critical", where: `${rel}:${i + 1}`, title: "Supabase service role key in the code", detail: `${mask(jwt)} skips every access rule. Anyone who opens the site can copy it.` });
+          findings.push({ kind: "service-key", key: "service_role", severity: "critical", where: `${rel}:${i + 1}`, title: "Supabase service role key in the code", detail: `${mask(jwt)} skips every access rule. Anyone who opens the site can copy it.` });
         }
+      }
+      // Supabase's newer secret keys aren't JWTs: sb_secret_ and a random string.
+      for (const hit of line.match(/\bsb_secret_[A-Za-z0-9_-]{20,}/g) ?? []) {
+        findings.push({ kind: "service-key", key: "secret", severity: "critical", where: `${rel}:${i + 1}`, title: "Supabase secret key in the code", detail: `${mask(hit)} skips every access rule. Anyone who opens the site can copy it.` });
       }
       for (const { re, what } of SECRETS) {
         for (const hit of line.match(re) ?? []) {

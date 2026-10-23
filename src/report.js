@@ -58,7 +58,7 @@ export function findingsFrom(results, views, functions, buckets) {
     const writes = /\b(insert\s+into|update\s+[\w."]+\s+set|delete\s+from)\b/i.test(f.body);
     findings.push({ kind: "definer-function", function: f.name, callers: f.anon ? "anyone" : "users", writes, severity: checks || !writes ? "review" : "high", where: `${f.name}(${f.args})`, title: "Function runs with full rights and anyone can call it",
       detail: `It's security definer, so it skips row-level security, and ${f.anon ? "visitors who aren't signed in" : "any signed-in user"} can call it${checks ? "." : ". It never checks auth.uid()."}${writes ? "" : " It only reads, but it can still reveal data the tables would hide."}`,
-      fix: `revoke execute on function public.${f.name}(${f.args}) from anon${f.anon ? ", authenticated" : ""}; or check auth.uid() inside it.` });
+      fix: `revoke execute on function public.${f.name}(${f.args}) from public, anon, authenticated; (Postgres lets public run every function unless revoked) or check auth.uid() inside it.` });
   }
   for (const b of buckets) {
     if (b.public) findings.push({ kind: "public-bucket", bucket: b.id, severity: "review", where: `storage bucket ${b.id}`, title: "Public storage bucket",

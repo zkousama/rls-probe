@@ -13,7 +13,8 @@ const repo = "https://github.com/zkousama/rls-probe";
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>rls-probe: is your Supabase app leaking data?</title>
     <meta name="description" content="Inspect a Supabase, Lovable or Bolt app for data leaks in your browser. rls-probe rebuilds your database, signs in two test users and tries to read and change each other's data. Nothing is uploaded." />
-    <meta name="theme-color" content="#fbfbf8" />
+    <meta name="theme-color" content="#fbfbf8" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#121a33" media="(prefers-color-scheme: dark)" />
     <link rel="icon" href={`${base}favicon.svg`} type="image/svg+xml" />
   </head>
   <body class="min-h-screen">
@@ -48,7 +49,7 @@ const repo = "https://github.com/zkousama/rls-probe";
               <label for="repo" class="sr-only">Your app's GitHub link</label>
               <div class="flex flex-col gap-3 sm:flex-row">
                 <input id="repo" type="text" inputmode="url" autocomplete="off" spellcheck="false" required placeholder="https://github.com/you/your-app"
-                  class="h-12 w-full rounded-md border-2 border-text bg-white px-4 text-[1.02rem] placeholder:text-muted/70 focus:border-ink focus:outline-none" />
+                  class="h-12 w-full rounded-md border-2 border-text bg-surface px-4 text-[1.02rem] placeholder:text-muted/70 focus:border-ink focus:outline-none" />
                 <button type="submit" class="btn btn-ink">Inspect my app</button>
               </div>
               <p class="mt-3 text-[0.95rem] text-muted">
@@ -58,7 +59,7 @@ const repo = "https://github.com/zkousama/rls-probe";
             </form>
 
             <div id="pane-files" role="tabpanel" aria-labelledby="tab-files" hidden>
-              <div id="drop" class="rounded-md border-2 border-dashed border-rule bg-white px-6 py-9 text-center transition-colors">
+              <div id="drop" class="rounded-md border-2 border-dashed border-rule bg-surface px-6 py-9 text-center transition-colors">
                 <input id="files" type="file" webkitdirectory multiple hidden />
                 <input id="zip" type="file" accept=".zip,application/zip" hidden />
                 <p class="font-bold text-text [font-stretch:110%]">Drop your project folder or its ZIP here</p>
@@ -73,7 +74,7 @@ const repo = "https://github.com/zkousama/rls-probe";
             <form id="pane-sql" role="tabpanel" aria-labelledby="tab-sql" hidden>
               <label for="sql" class="sr-only">Your database schema</label>
               <textarea id="sql" rows="9" spellcheck="false" required placeholder="create table public.notes (...);"
-                class="w-full rounded-md border-2 border-text bg-white p-4 font-mono text-[0.85rem] leading-relaxed focus:border-ink focus:outline-none"></textarea>
+                class="w-full rounded-md border-2 border-text bg-surface p-4 font-mono text-[0.85rem] leading-relaxed focus:border-ink focus:outline-none"></textarea>
               <div class="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <p class="text-[0.95rem] text-muted">Your migrations, or the output of <code>supabase db dump</code>.</p>
                 <button type="submit" class="btn btn-ink">Inspect</button>
@@ -92,7 +93,7 @@ const repo = "https://github.com/zkousama/rls-probe";
         </figure>
       </section>
 
-      <section id="progress" class="max-w-2xl rounded-md border border-rule bg-white p-6" aria-live="polite" hidden>
+      <section id="progress" class="max-w-2xl rounded-md border border-rule bg-surface p-6" aria-live="polite" hidden>
         <p class="font-bold text-ink [font-stretch:112%]">Inspecting…</p>
         <p id="progress-sub" class="text-[0.95rem] text-muted"></p>
         <ol class="steps mt-4 grid gap-1.5"></ol>
@@ -178,8 +179,8 @@ const repo = "https://github.com/zkousama/rls-probe";
 
 <style is:global>
   .tab { position: relative; padding-left: 1.6rem; font-weight: 600; color: var(--color-muted); cursor: pointer; }
-  .tab::before { content: ""; position: absolute; left: 0; top: 50%; width: 1.05rem; height: 1.05rem; margin-top: -0.53rem; border: 2px solid var(--color-muted); border-radius: 50%; background: #fff; }
+  .tab::before { content: ""; position: absolute; left: 0; top: 50%; width: 1.05rem; height: 1.05rem; margin-top: -0.53rem; border: 2px solid var(--color-muted); border-radius: 50%; background: var(--color-surface); }
   .tab[aria-selected="true"] { color: var(--color-text); }
-  .tab[aria-selected="true"]::before { border-color: var(--color-ink); background: radial-gradient(circle, var(--color-ink) 0 0.27rem, #fff 0.3rem); }
+  .tab[aria-selected="true"]::before { border-color: var(--color-ink); background: radial-gradient(circle, var(--color-ink) 0 0.27rem, var(--color-surface) 0.3rem); }
   #drop.over { border-color: var(--color-ink); background: var(--color-ink-soft); }
 </style>

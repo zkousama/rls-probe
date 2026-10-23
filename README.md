@@ -82,7 +82,7 @@ In Cursor, Windsurf, Claude Desktop or any other MCP client, add the server:
 ```json
 {
   "mcpServers": {
-    "rls-probe": { "command": "npx", "args": ["-y", "rls-probe@0.5.0", "mcp"] }
+    "rls-probe": { "command": "npx", "args": ["-y", "rls-probe@0.5.1", "mcp"] }
   }
 }
 ```
