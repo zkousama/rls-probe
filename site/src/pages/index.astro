@@ -1,33 +1,11 @@
 ---
-import "../styles/global.css";
-import pkg from "../../../package.json";
-
-const base = import.meta.env.BASE_URL;
-const repo = "https://github.com/zkousama/rls-probe";
+import Base from "../layouts/Base.astro";
 ---
 
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>rls-probe: is your Supabase app leaking data?</title>
-    <meta name="description" content="Inspect a Supabase, Lovable or Bolt app for data leaks in your browser. rls-probe rebuilds your database, signs in two test users and tries to read and change each other's data. Nothing is uploaded." />
-    <meta name="theme-color" content="#fbfbf8" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#121a33" media="(prefers-color-scheme: dark)" />
-    <link rel="icon" href={`${base}favicon.svg`} type="image/svg+xml" />
-  </head>
-  <body class="min-h-screen">
-    <header class="mx-auto flex max-w-6xl items-center justify-between px-5 py-6 sm:px-8">
-      <a href={base} class="text-xl font-extrabold text-ink [font-stretch:125%]">rls-probe</a>
-      <nav class="flex items-center gap-6 text-[0.95rem] text-muted">
-        <a href="#how" class="hidden hover:text-text sm:inline">How it works</a>
-        <a href="#developers" class="hidden hover:text-text sm:inline">For developers</a>
-        <a href={repo} class="font-semibold text-text underline decoration-rule decoration-2 underline-offset-4 hover:decoration-ink">Source on GitHub</a>
-      </nav>
-    </header>
-
-    <main class="mx-auto max-w-6xl px-5 pb-20 sm:px-8">
+<Base
+  title="rls-probe: is your Supabase app leaking data?"
+  description="Inspect a Supabase, Lovable or Bolt app for data leaks in your browser. rls-probe rebuilds your database, signs in two test users and tries to read and change each other's data. Nothing is uploaded."
+>
       <section class="grid items-start gap-12 pt-6 pb-10 lg:grid-cols-[1.35fr_0.65fr] lg:pt-12">
         <div>
           <h1 class="max-w-[14ch] text-[clamp(2.6rem,6.4vw,4.75rem)] leading-[0.98] font-extrabold tracking-[-0.02em] text-ink [font-stretch:125%]">
@@ -143,6 +121,15 @@ const repo = "https://github.com/zkousama/rls-probe";
         </div>
       </section>
 
+      <section id="guides" class="mt-24 border-t-2 border-text pt-10">
+        <h2 class="text-[clamp(1.8rem,3.6vw,2.6rem)] leading-tight font-extrabold text-ink [font-stretch:120%]">Guides</h2>
+        <ul class="mt-6 grid gap-6 md:grid-cols-3">
+          <li><a class="text-lg font-bold text-ink underline decoration-rule decoration-2 underline-offset-4 hover:decoration-ink" href="supabase-permission-denied-42501/">Fixing "permission denied" (42501) after October 30</a><p class="mt-1.5 text-muted">Why new tables stopped answering, the fix that leaks data, and the one that doesn't.</p></li>
+          <li><a class="text-lg font-bold text-ink underline decoration-rule decoration-2 underline-offset-4 hover:decoration-ink" href="is-my-lovable-app-secure/">Is my Lovable app secure?</a><p class="mt-1.5 text-muted">The holes most AI-built apps have, and how to check yours in a minute.</p></li>
+          <li><a class="text-lg font-bold text-ink underline decoration-rule decoration-2 underline-offset-4 hover:decoration-ink" href="supabase-secret-key-leaked/">Leaked your Supabase secret key?</a><p class="mt-1.5 text-muted">Which keys are safe in the browser, and how to replace one that isn't.</p></li>
+        </ul>
+      </section>
+
       <section id="developers" class="mt-24 border-t-2 border-text pt-10">
         <h2 class="text-[clamp(1.8rem,3.6vw,2.6rem)] leading-tight font-extrabold text-ink [font-stretch:120%]">For developers</h2>
         <p class="mt-3 max-w-[60ch] text-muted">The same inspection runs from the command line, in CI on every pull request, and as a tool your AI agent calls itself.</p>
@@ -165,17 +152,10 @@ const repo = "https://github.com/zkousama/rls-probe";
         </div>
       </section>
 
-      <footer class="mt-24 border-t border-rule pt-6 text-[0.9rem] text-muted">
-        <p>rls-probe {pkg.version}, open source under the MIT license. <a class="underline underline-offset-4" href={repo}>Source on GitHub</a>, <a class="underline underline-offset-4" href="https://www.npmjs.com/package/rls-probe">package on npm</a>.</p>
-        <p class="mt-1">Not affiliated with Supabase, Lovable or Bolt.</p>
-      </footer>
-    </main>
-
     <script>
       import "../scripts/app.js";
     </script>
-  </body>
-</html>
+</Base>
 
 <style is:global>
   .tab { position: relative; padding-left: 1.6rem; font-weight: 600; color: var(--color-muted); cursor: pointer; }

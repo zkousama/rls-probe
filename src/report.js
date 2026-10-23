@@ -1,7 +1,7 @@
 export const SENSITIVE = /(email|phone|address|latitude|longitude|zip_code|postal|password|token|secret|iban|ssn|birth|salary|stripe|customer_id|api_key)/i;
 export const ORDER = { critical: 0, high: 1, medium: 2, review: 3 };
 
-export function findingsFrom(results, views, functions, buckets) {
+export function findingsFrom(results, views, functions, buckets, storage) {
   const findings = [];
   for (const r of results) {
     if (r.skipped || !r.anon) continue;
@@ -60,6 +60,37 @@ export function findingsFrom(results, views, functions, buckets) {
       detail: `It's security definer, so it skips row-level security, and ${f.anon ? "visitors who aren't signed in" : "any signed-in user"} can call it${checks ? "." : ". It never checks auth.uid()."}${writes ? "" : " It only reads, but it can still reveal data the tables would hide."}`,
       fix: `revoke execute on function public.${f.name}(${f.args}) from public, anon, authenticated; (Postgres lets public run every function unless revoked) or check auth.uid() inside it.` });
   }
+  // Files: what a visitor and another user managed to do in user A's folder.
+  const own = "only in their own folder: (storage.foldername(name))[1] = auth.uid()::text";
+  for (const s of (storage?.buckets ?? []).filter((b) => !b.skipped)) {
+    const where = `storage bucket ${s.bucket}`;
+    const anonWrites = ["update", "delete", "insert"].filter((k) => s.anon[k]);
+    const userChanges = ["update", "delete"].filter((k) => s.B[k]);
+    if (anonWrites.length) {
+      // Replacing or deleting someone's files is worse than adding new ones, which a
+      // public upload form may do on purpose.
+      const changes = anonWrites.some((k) => k !== "insert");
+      findings.push({ kind: "storage-visitor-write", bucket: s.bucket, actions: anonWrites, severity: changes ? "critical" : "high", where,
+        title: changes ? "Visitors can change users' files" : "Visitors can upload files into users' folders",
+        detail: `Without signing in, anyone can ${verbs(anonWrites)} files in a user's folder.`, fix: `Limit the storage.objects policies for this bucket to the authenticated role, ${own}.` });
+    }
+    // Reading a public bucket's files is what public means; that's its own finding.
+    if (!s.public && s.anon.read) {
+      findings.push({ kind: "storage-visitor-read", bucket: s.bucket, actions: ["read"], severity: "high", where, title: "Visitors can list and download users' files",
+        detail: "The bucket is private, but its policies let anyone read the files in a user's folder without signing in.", fix: `Limit the select policy to the authenticated role, ${own}.` });
+    } else if (!s.public && s.B.read) {
+      findings.push({ kind: "storage-user-read", bucket: s.bucket, actions: ["read"], severity: "review", where, title: "Users can read each other's files",
+        detail: "Any signed-in user can download files in someone else's folder. Fine for shared files, not for private ones.", fix: `Limit the select policy ${own}.` });
+    }
+    if (userChanges.length) {
+      findings.push({ kind: "storage-user-write", bucket: s.bucket, actions: userChanges, severity: "high", where, title: "Users can change each other's files",
+        detail: `A signed-in user can ${verbs(userChanges)} files in someone else's folder.`, fix: `Limit the update and delete policies ${own}.` });
+    }
+    if (s.B.insert) {
+      findings.push({ kind: "storage-user-upload", bucket: s.bucket, actions: ["insert"], severity: "medium", where, title: "Users can upload into someone else's folder",
+        detail: "A signed-in user can put files in another user's folder, where they look like that user's.", fix: `Add with check, ${own}, to the insert policy.` });
+    }
+  }
   for (const b of buckets) {
     if (b.public) findings.push({ kind: "public-bucket", bucket: b.id, severity: "review", where: `storage bucket ${b.id}`, title: "Public storage bucket",
       detail: "Every file in it can be downloaded by anyone who has or guesses its path.", fix: "Fine for avatars and product photos. For anything private, make the bucket private and use signed URLs." });
@@ -67,7 +98,7 @@ export function findingsFrom(results, views, functions, buckets) {
   return findings.sort((a, b) => ORDER[a.severity] - ORDER[b.severity]);
 }
 
-export function renderText({ target, load, seedProblems, results, findings }) {
+export function renderText({ target, load, seedProblems, results, findings, storage }) {
   const out = [];
   out.push(`rls-probe ${target}`, "");
   out.push(`Migrations: ${load.applied} statements applied, ${load.skipped.length} skipped, ${load.failed.length} failed.`);
@@ -85,7 +116,11 @@ export function renderText({ target, load, seedProblems, results, findings }) {
       r.table, r.rls ? "on" : "OFF", r.owned ? "users" : "shared",
       yes(r.anon.read), yes(r.anon.update), yes(r.anon.delete), yes(r.anon.insert),
       yes(r.B.read), yes(r.B.update), yes(r.B.delete), yes(r.B.insert),
-    ]);
+    ]).concat((storage?.buckets ?? []).filter((s) => !s.skipped).map((s) => [
+      `files: ${s.bucket}`, storage.rls ? "on" : "OFF", s.public ? "public" : "users",
+      yes(s.anon.read), yes(s.anon.update), yes(s.anon.delete), yes(s.anon.insert),
+      yes(s.B.read), yes(s.B.update), yes(s.B.delete), yes(s.B.insert),
+    ]));
     const head = [["table", "RLS", "rows", "read", "edit", "delete", "create", "read", "edit", "delete", "create"]];
     const widths = head[0].map((_, i) => Math.max(...[...head, ...rows].map((r) => r[i].length)));
     const line = (r) => r.map((c, i) => c.padEnd(widths[i])).join("  ").trimEnd();

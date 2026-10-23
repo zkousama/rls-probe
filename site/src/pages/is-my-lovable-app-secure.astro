@@ -1,0 +1,45 @@
+---
+import Base from "../layouts/Base.astro";
+const base = import.meta.env.BASE_URL;
+---
+
+<Base
+  title="Is my Lovable app secure? How to check who can read your users' data"
+  description="The holes most Lovable and Bolt apps have, in plain words, and how to check yours in a minute without touching your live database."
+>
+  <article class="guide pt-6">
+    <h1>Is my Lovable app secure?</h1>
+    <p class="lead">Apps built with Lovable or Bolt talk to Supabase straight from the browser, with a key every visitor gets. That key isn't what keeps your users' data private. The database's row-level security rules are, and when they're missing or too loose, anyone can read, and often change, other people's data.</p>
+
+    <h2>How common it is</h2>
+    <p>In 2025 a scan of 1,645 Lovable apps found 170 that exposed their users' data this way (CVE-2025-48757). When we ran rls-probe on 25 open-source apps built with Lovable, Bolt or by hand, it flagged 19 of them with at least one critical or high problem.</p>
+
+    <h2>The holes that come up most</h2>
+    <ul>
+      <li><strong>Database functions anyone can call.</strong> A function marked <code>security definer</code> runs with full rights, skipping every rule. In 13 of the 25 apps, visitors or any signed-in user could call one.</li>
+      <li><strong>Rows created in someone else's name.</strong> An insert rule that doesn't check who's inserting lets one user post messages or notifications that look like another user's (10 apps).</li>
+      <li><strong>Visitors who can change data.</strong> Rules that let anyone, signed in or not, add or edit rows (9 apps).</li>
+      <li><strong>File storage open to everyone.</strong> Buckets where anyone can upload into, replace or delete other people's files (8 apps).</li>
+      <li><strong>Server functions anyone can run.</strong> Edge functions with their login check turned off and no check of their own (6 apps).</li>
+      <li><strong>The secret key in the browser.</strong> The service role key, or an <code>sb_secret_</code> key, in front-end code skips every rule for whoever copies it. See <a href={`${base}supabase-secret-key-leaked/`}>what to do if yours leaked</a>.</li>
+    </ul>
+
+    <h2>How to check yours</h2>
+    <ol>
+      <li>Get your app's code. In Lovable, connect GitHub and copy the repository link. In Bolt, use Download.</li>
+      <li><a href={base}>Paste the link, or drop the ZIP, into rls-probe</a>. It rebuilds your database in your browser, signs in two test users and tries to read and change each other's data. Nothing is uploaded, and your live database is never touched.</li>
+      <li>Copy the fix it writes and paste it into Lovable's chat. It names your own tables and rules, so Lovable changes the right thing.</li>
+      <li>Check again once Lovable has made the changes.</li>
+    </ol>
+
+    <h2>If your app runs on Lovable Cloud</h2>
+    <p>Lovable Cloud projects are managed by Lovable and don't appear in a Supabase dashboard, so fix them through Lovable's chat. The request rls-probe writes is made for that.</p>
+
+    <div class="cta">
+      <p>Check your app now</p>
+      <p><a href={base}>Inspect it in the browser</a>. It takes a few seconds and gives you a grade from A to F.</p>
+    </div>
+
+    <p class="sources">Sources: <a href="https://nvd.nist.gov/vuln/detail/CVE-2025-48757">CVE-2025-48757</a>; Supabase, <a href="https://supabase.com/docs/guides/troubleshooting/cant-access-supabase-project-lovable-cloud">Can't access a Lovable Cloud project</a>. The 25-app figures come from running rls-probe 0.5 on public repositories; they're findings to check, not confirmed breaches.</p>
+  </article>
+</Base>

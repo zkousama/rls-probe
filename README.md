@@ -82,7 +82,7 @@ In Cursor, Windsurf, Claude Desktop or any other MCP client, add the server:
 ```json
 {
   "mcpServers": {
-    "rls-probe": { "command": "npx", "args": ["-y", "rls-probe@0.5.1", "mcp"] }
+    "rls-probe": { "command": "npx", "args": ["-y", "rls-probe@0.6.0", "mcp"] }
   }
 }
 ```
@@ -99,6 +99,7 @@ to change) and `write_supabase_grants_migration` (the `--fix` migration).
 | `--markdown` | A Markdown report, for pull requests and AI agents |
 | `--sarif` | SARIF, for GitHub code scanning |
 | `--json` | Everything, for scripts |
+| `--badge` | A README badge with the grade, linking to the web page |
 
 `--markdown-file=<path>` and `--sarif-file=<path>` write those formats as well,
 in the same run.
@@ -133,10 +134,13 @@ and still let one user edit another's rows. So this doesn't read them. It tries.
   tables underneath unless they're `security_invoker`.
 - **`security definer` functions** that visitors or any user can call, and that
   never check `auth.uid()`.
-- **Public storage buckets.**
-- **The code**: a service role key or other secret keys in front-end files or a
-  build, `VITE_`/`NEXT_PUBLIC_` variables holding secrets, and edge functions with
-  `verify_jwt = false` that don't check who's calling.
+- **Storage**: every bucket the migrations create, and any a storage policy
+  names (often made in the dashboard). Each user gets a file in their own folder,
+  and a visitor and the other user try to see, replace, delete and upload into
+  it. Public buckets are flagged too.
+- **The code**: a service role key or `sb_secret_` key, or other secret keys, in
+  front-end files or a build, `VITE_`/`NEXT_PUBLIC_` variables holding secrets,
+  and edge functions with `verify_jwt = false` that don't check who's calling.
 
 ## Supabase's 2026 grants change
 
@@ -271,7 +275,9 @@ files each), every run finishes, most in 2 to 4 seconds.
   trigger) is listed rather than counted as refused.
 - Tables whose primary key is also the user's id, like `profiles`, can't be
   tested for "create a row for someone else": that row already exists.
-- It reads storage bucket settings, not storage policies.
+- Storage is tested with files under a folder named for their owner, the way
+  Supabase's examples store them. Rules built around other paths (a team's folder,
+  say) may look stricter here than they are.
 - By default it gives `anon`, `authenticated` and `service_role` every table in
   `public`, as Supabase projects have done. For a project created since May 30,
   2026, use `--grants=explicit`, or the report can show more than the API would

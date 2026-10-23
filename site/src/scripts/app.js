@@ -1,6 +1,6 @@
 // The page: reads an app from a GitHub link, a folder, a ZIP or pasted SQL, runs
 // rls-probe on it in this browser, and shows the inspection.
-import { explain, fixPrompt } from "../../../src/explain.js";
+import { badge, explain, fixPrompt } from "../../../src/explain.js";
 import { renderGrants } from "../../../src/grants.js";
 import { chooseFiles } from "../../../src/project.js";
 import { renderText } from "../../../src/report.js";
@@ -11,6 +11,7 @@ const BASE = import.meta.env.BASE_URL;
 const MAX_CODE_FILES = 800;
 const MAX_FILE_BYTES = 2_000_000;
 const SAMPLE = "https://github.com/zkousama/rls-probe/tree/main/test/fixtures/leaky";
+const HIRE = "https://www.upwork.com/freelancers/~012952805fd983991e";
 
 // A problem with what was given, said to the person, as opposed to a bug.
 class Problem extends Error {}
@@ -279,7 +280,10 @@ function show(report, project) {
       el("p", { className: "mt-1 text-text [overflow-wrap:anywhere]" }, !tables ? "The migrations create no tables, so this is not an all clear." : `Inspection of ${project.label}.${tally.length ? ` ${capitalize(tally.join(", "))}.` : ""}`),
       ...(project.note ? [el("p", { className: "mt-1 text-[0.95rem] text-muted" }, project.note)] : []),
       actions,
-      ...(fixable ? [el("p", { className: "mt-3 text-[0.95rem] text-muted" }, "Paste the fix into Lovable, Bolt, Cursor or Claude. When your app is updated, inspect it again.")] : []),
+      ...(fixable ? [
+        el("p", { className: "mt-3 text-[0.95rem] text-muted" }, "Paste the fix into Lovable, Bolt, Cursor or Claude. When your app is updated, inspect it again."),
+        el("p", { className: "mt-1 text-[0.95rem] text-muted" }, "Rather have a person fix it? ", el("a", { href: HIRE, className: "font-semibold text-ink underline decoration-2 underline-offset-4" }, "Hire the developer who built rls-probe"), "."),
+      ] : []),
     ),
   );
 
@@ -294,6 +298,11 @@ function show(report, project) {
     )))));
   }
   if (report.results.length) sections.push(checklist(report));
+  if (e.grade === "A" || e.grade === "B") {
+    const line = badge(report);
+    sections.push(section("Show your grade", "Add it to your README. It shows today's grade, so inspect again after changes to keep it honest.",
+      el("pre", { className: "codebox" }, line), copyButton("Copy the badge", line, "btn btn-line")));
+  }
   if (e.grants) {
     const body = [el("p", {}, e.grants.summary)];
     if (e.grants.lines.length) body.push(el("p", { className: "mt-3 text-[0.95rem] text-muted" }, "Add these lines to a new migration, or let the fix above do it:"), el("pre", { className: "codebox" }, e.grants.lines.join("\n")), copyButton("Copy the grants", `${e.grants.lines.join("\n")}\n`, "btn btn-line"));
@@ -348,9 +357,18 @@ function checklist(report) {
         ...["anon", "B"].flatMap((who) => ACTIONS.map(([a, label], i) => mark(r, who, a, label, i === 0))),
       )),
       ...report.results.filter((r) => !r.anon).map((r) => el("tr", {}, el("td", { className: "table-name" }, r.table), el("td", { colSpan: 8, className: "gap text-left text-[0.88rem] text-muted" }, `Not tested: ${r.skipped}`))),
+      // Files in storage, same marks: reading a public bucket is what public means.
+      ...(report.storage?.buckets ?? []).filter((b) => !b.skipped).map((b) => el("tr", {},
+        el("td", { className: "table-name" }, `files in ${b.bucket}`, el("span", { className: "flag shared" }, b.public ? "public bucket" : "private bucket")),
+        ...["anon", "B"].flatMap((who) => ACTIONS.map(([a, label], i) => {
+          const done = b[who][a];
+          const s = !done ? "blocked" : a === "read" && b.public ? "public" : "reached";
+          return el("td", { className: i === 0 ? "gap" : "" }, el("span", { className: `mark mark-${s}`, title: `${who === "anon" ? "A visitor" : "Another user"}, ${label}: ${WORD[s]}`, ariaLabel: `${label}: ${WORD[s]}` }, MARK[s]));
+        })),
+      )),
     ),
   );
-  return section("Who could reach your users' rows", "Each table held rows belonging to a test user. This is what the others managed to do to them.",
+  return section("Who could reach your users' rows and files", "Each table held rows, and each bucket a file, belonging to a test user. This is what the others managed to do to them.",
     el("div", { className: "-mx-1 overflow-x-auto px-1" }, table),
     el("p", { className: "mt-4 flex flex-wrap gap-x-6 gap-y-1 text-[0.9rem] text-muted" },
       el("span", {}, el("span", { className: "mark mark-reached" }, "✗"), "reached another user's data"),

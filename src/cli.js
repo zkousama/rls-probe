@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { runProbe } from "./engine.js";
-import { fixPrompt, renderMarkdown, renderPlain } from "./explain.js";
+import { badge, fixPrompt, renderMarkdown, renderPlain } from "./explain.js";
 import { migrationFor, renderGrants } from "./grants.js";
 import { findMigrations, grantsInBackground, readCodeFiles, readMigrations } from "./node.js";
 import { renderText } from "./report.js";
@@ -18,7 +18,7 @@ if (process.argv[2] === "mcp") {
 const args = process.argv.slice(2);
 // What to print: the plain summary and the details (the default), --prompt for an
 // AI builder, --markdown, --sarif for GitHub code scanning, or --json.
-const FORMATS = ["text", "json", "prompt", "markdown", "sarif"];
+const FORMATS = ["text", "json", "prompt", "markdown", "sarif", "badge"];
 const format = args.find((a) => a.startsWith("--format="))?.slice(9) ?? FORMATS.find((f) => args.includes(`--${f}`)) ?? "text";
 if (!FORMATS.includes(format)) {
   console.error(`Unknown format "${format}". Use one of: ${FORMATS.join(", ")}.`);
@@ -74,6 +74,10 @@ if (format === "json") console.log(JSON.stringify(report, null, 2));
 else if (format === "prompt") process.stdout.write(fixPrompt(report));
 else if (format === "markdown") console.log(markdown());
 else if (format === "sarif") console.log(sarif());
+else if (format === "badge") {
+  const line = badge(report);
+  console.log(line ? `${line}\n\nThis shows today's grade. Run rls-probe again after changes (or in CI) to keep it honest.` : "Nothing was checked, so there's no grade to show.");
+}
 else console.log(`${renderPlain(report)}\nDetails\n\n${details()}${wrote ? `\n${wrote}` : ""}`);
 if (markdownFile) fs.writeFileSync(markdownFile, markdown());
 if (sarifFile) fs.writeFileSync(sarifFile, sarif());

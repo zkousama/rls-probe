@@ -248,3 +248,20 @@ test("the do-it-yourself fixes close what they say they close, and owners keep t
   assert.ok(orders.A.read > 0 && orders.A.update && orders.A.insert, "the owner still reads, edits and adds their own");
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test("storage: who can read, change and upload into another user's folder, bucket by bucket", () => {
+  const files = Object.fromEntries(messy.report.storage.buckets.map((b) => [b.bucket, b]));
+  assert.deepEqual(files.documents.B, { read: true, update: false, delete: false, insert: true }, "any signed-in user reads and uploads");
+  assert.equal(files.documents.anon.read, false);
+  assert.equal(files.avatars.B.insert, false, "avatars are kept to each user's own folder");
+  assert.equal(files.receipts.assumed, true, "made in the dashboard, found through its policies");
+  assert.deepEqual(files.receipts.B, { read: false, update: false, delete: false, insert: false });
+  assert.ok(files.receipts.A.read && files.receipts.A.insert, "the owner keeps their own files");
+  assert.ok(messyFindings.includes("medium storage bucket documents: Users can upload into someone else's folder"));
+  assert.ok(messyFindings.includes("review storage bucket documents: Users can read each other's files"));
+  assert.ok(!messyFindings.some((f) => f.includes("receipts")));
+});
+
+test("--badge prints a README badge in the grade's colour", () => {
+  assert.match(runText(fixed, "--badge"), /^\[!\[rls-probe: grade B\]\(https:\/\/img\.shields\.io\/badge\/rls--probe-grade%20B-1f7a4d\)\]\(https:\/\/zkousama\.github\.io\/rls-probe\/\)/);
+});

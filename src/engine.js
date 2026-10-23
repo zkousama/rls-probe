@@ -2,7 +2,7 @@
 // server and the web page all hand it the app's files and get the report back.
 import { grantsReport } from "./grants.js";
 import { loadDatabase } from "./load.js";
-import { probeTables, probeViews } from "./probe.js";
+import { probeStorage, probeTables, probeViews } from "./probe.js";
 import { ORDER, findingsFrom } from "./report.js";
 import { readBuckets, readFunctions, readPolicies, readSchema } from "./schema.js";
 import { ownerRoute, seed } from "./seed.js";
@@ -23,10 +23,13 @@ export async function runProbe({ migrations, code = [], grants = "legacy", oct30
   onProgress("probe");
   const results = await probeTables(load.db, tables, known);
   const views = await probeViews(load.db, tables);
+  // Storage is probed on its own terms: if a project's storage schema is too unusual
+  // to probe, the tables' results still stand.
+  const storage = await probeStorage(load.db).catch((error) => ({ rls: null, buckets: [], policies: [], error: error.message }));
   const functions = await readFunctions(load.db);
   const buckets = await readBuckets(load.db);
   const policies = await readPolicies(load.db);
-  const findings = [...findingsFrom(results, views, functions, buckets), ...scanCode(code)];
+  const findings = [...findingsFrom(results, views, functions, buckets, storage), ...scanCode(code)];
   findings.sort((a, b) => ORDER[a.severity] - ORDER[b.severity]);
 
   // How each owned table's rows lead to a user, for fixes that name the column.
@@ -41,8 +44,9 @@ export async function runProbe({ migrations, code = [], grants = "legacy", oct30
     seedProblems: problems,
     results,
     views,
+    storage: { rls: storage.rls, buckets: storage.buckets, ...(storage.error ? { error: storage.error } : {}) },
     findings,
-    policies: byTable(policies),
+    policies: { ...byTable(policies), ...(storage.policies.length ? { "storage.objects": storage.policies.map((p) => ({ name: p.name, cmd: p.cmd, roles: p.roles, using: p.qual, check: p.check })) } : {}) },
     createdAt: locate(migrations),
   };
   if (oct30) onProgress("grants");

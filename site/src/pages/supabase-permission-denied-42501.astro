@@ -1,0 +1,51 @@
+---
+import Base from "../layouts/Base.astro";
+const base = import.meta.env.BASE_URL;
+---
+
+<Base
+  title="Fixing “permission denied for table” (42501) after Supabase's October 30 change"
+  description="Why new Supabase tables answer 42501 since October 30, 2026, the quick fix that leaks data, and how to grant each table only what it needs."
+>
+  <article class="guide pt-6">
+    <h1>Fixing “permission denied” (42501) after October 30</h1>
+    <p class="lead">If a new feature in your Supabase app shows nothing, or an error like <code>permission denied for table orders</code> (code 42501), this is almost certainly why.</p>
+
+    <h2>What changed</h2>
+    <p>Supabase used to give every new table in the <code>public</code> schema to three roles: visitors (<code>anon</code>), signed-in users (<code>authenticated</code>) and your server (<code>service_role</code>). Row-level security then decided which rows each of them could reach.</p>
+    <p>Projects created since May 30, 2026 no longer get that. From October 30, 2026, neither does any project, for tables created from then on. Tables you already had keep their access. A table nobody granted answers 42501, to your users and to your edge functions alike.</p>
+
+    <h2>The quick fix that leaks data</h2>
+    <p>The fix going around is to grant everything, on every table, to everyone. On a table whose row-level security is off, or whose policy says <code>using (true)</code>, that grant is exactly what lets anyone read or change every row.</p>
+
+    <h2>The fix that doesn't</h2>
+    <p>Grant each table only what its policies need, in the same migration that creates it:</p>
+    <pre class="codebox">create table public.notes (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users,
+  body text
+);
+alter table public.notes enable row level security;
+create policy "Owners manage their notes" on public.notes for all to authenticated
+  using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
+
+grant select, insert, update, delete on public.notes to authenticated;
+grant select, insert, update, delete on public.notes to service_role;</pre>
+    <ul>
+      <li>Grant <code>anon</code> only on tables visitors should read, and usually only <code>select</code>.</li>
+      <li>Grant <code>service_role</code> too, or edge functions using the secret key get 42501 on the new table.</li>
+      <li>If users insert rows into a table with a <code>serial</code> id, grant <code>usage</code> on its sequence as well.</li>
+    </ul>
+
+    <h2>If you build with Lovable or Bolt</h2>
+    <p>Ask for the grants up front. A request that works: “When you create a table, add GRANT statements for anon only if visitors should read it, for authenticated, and for service_role, and enable RLS with policies, in the same migration.”</p>
+
+    <div class="cta">
+      <p>See which grants are safe for your app</p>
+      <p>rls-probe rebuilds your database from its migrations and sorts every table: safe to grant (with the exact lines), fix first (a grant would expose data), and closed only because nothing grants it yet. Its suggestions were checked against a real Supabase opted into the change: all 100 checks agreed on a 15-table app built with Lovable.</p>
+      <p><a href={base}>Inspect your app in the browser</a>, or run <code>npx rls-probe . --fix</code> to write the safe grants as a migration.</p>
+    </div>
+
+    <p class="sources">Source: Supabase's announcement of the change, <a href="https://github.com/orgs/supabase/discussions/45329">github.com/orgs/supabase/discussions/45329</a>.</p>
+  </article>
+</Base>

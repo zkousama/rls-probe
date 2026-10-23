@@ -33,6 +33,15 @@ export function grade(report) {
   return has("review") || grants || report.load.missing?.length ? "B" : "A";
 }
 
+// A README badge with the grade, in the grade card's colour, linking to the web page.
+// It shows the grade on the day it was made: re-running rls-probe keeps it honest.
+const BADGE_COLOUR = { A: "1d3b8c", B: "1f7a4d", C: "b45a00", D: "c2410c", F: "c2142d" };
+export const SITE = "https://zkousama.github.io/rls-probe/";
+export function badge(report) {
+  const g = grade(report);
+  return g ? `[![rls-probe: grade ${g}](https://img.shields.io/badge/rls--probe-grade%20${g}-${BADGE_COLOUR[g]})](${SITE})` : null;
+}
+
 // The text the CLI prints first, before the details.
 export function renderPlain(report) {
   const e = explain(report);
@@ -177,6 +186,31 @@ function say(f, report) {
         headline: `The database function ${f.function}() runs with full rights, and ${f.callers === "anyone" ? "anyone on the internet" : "any signed-in user"} can call it${f.writes ? " to change data" : ""}.`,
         ask: `In ${f.function}, check that the caller is allowed (with auth.uid()) before it reads or changes anything, or stop ${f.callers === "anyone" ? "visitors and users" : "users"} calling it: revoke execute on function public.${t} from public, anon, authenticated; (revoking only from anon isn't enough: Postgres lets public run every function).`,
       };
+    case "storage-visitor-write":
+    case "storage-visitor-read":
+    case "storage-user-write":
+    case "storage-user-upload":
+    case "storage-user-read": {
+      const b = f.bucket;
+      // The storage policies for this bucket, and those for every bucket.
+      const files = (report.policies?.["storage.objects"] ?? []).filter((p) => {
+        const rule = `${p.using ?? ""} ${p.check ?? ""}`;
+        return !/bucket_id/.test(rule) || rule.includes(`'${b}'`);
+      });
+      const ref = (actions, role) => policyRef(files, actions, role).replace(/ policies$/, " policies on storage.objects");
+      const own = "(storage.foldername(name))[1] = (select auth.uid())::text";
+      const says = {
+        "storage-visitor-write": [`Anyone on the internet, without signing in, can ${list(acts, "and")} files in other people's folders in the "${b}" bucket.`,
+          f.actions.some((a) => a !== "insert")
+            ? `Change ${ref(f.actions, "anon")} so only signed-in users can ${list(acts, "or")} files, and only in their own folder: ${own}.`
+            : `If visitors are meant to upload here (a form, say), keep ${ref(["insert"], "anon")} but limit the bucket's file size and types. Otherwise change it so only signed-in users upload, into their own folder: ${own}.`],
+        "storage-visitor-read": [`Anyone on the internet can list and download users' files in the private "${b}" bucket.`, `If these files are meant to be public (a gallery or product photos, say), make the bucket public instead. Otherwise change ${ref(["read"], "anon")} so only signed-in users read files, and only their own: ${own}.`],
+        "storage-user-write": [`Any signed-in user can ${list(acts, "and")} other users' files in the "${b}" bucket.`, `Change ${ref(f.actions, "authenticated")} so users can only ${list(acts, "or")} files in their own folder: ${own}.`],
+        "storage-user-upload": [`A signed-in user can upload files into someone else's folder in the "${b}" bucket.`, `In ${ref(["insert"], "authenticated")}, add with check (${own}) so users can only upload into their own folder.`],
+        "storage-user-read": [`Any signed-in user can download other users' files in the "${b}" bucket.`, `If these files are private, change ${ref(["read"], "authenticated")} so users only read their own folder: ${own}.`],
+      }[f.kind];
+      return { headline: says[0], ask: says[1] };
+    }
     case "public-bucket":
       return {
         headline: `Files in the "${f.bucket}" storage bucket can be downloaded by anyone who has the link.`,

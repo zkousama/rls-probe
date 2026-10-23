@@ -138,3 +138,54 @@ export async function probeViews(db, tables) {
   }
   return out;
 }
+
+// Storage: a file of each user's in every bucket, stored the way Supabase's own
+// examples do (under a folder named for the user, with owner set), then a visitor
+// and user B try to see, replace, delete and upload into user A's folder. Buckets
+// are the ones the migrations create plus any a storage policy names, since those
+// are often made in the dashboard.
+export async function probeStorage(db) {
+  const policies = (await db.query(`select policyname as name, cmd, roles::text[] as roles, qual, with_check as check
+    from pg_policies where schemaname = 'storage' and tablename = 'objects' order by policyname`)).rows;
+  const rls = (await db.query(`select relrowsecurity as on from pg_class where oid = 'storage.objects'::regclass`)).rows[0].on;
+  const buckets = (await db.query(`select id, public from storage.buckets order by id`)).rows;
+  const named = new Set(policies.flatMap((p) => [...`${p.qual ?? ""} ${p.check ?? ""}`.matchAll(/bucket_id\s*=\s*'([^']+)'/g)].map((m) => m[1])));
+  for (const id of [...named].sort()) {
+    if (buckets.some((b) => b.id === id)) continue;
+    await db.query(`insert into storage.buckets (id, name, public) values ($1, $1, false)`, [id]);
+    buckets.push({ id, public: false, assumed: true });
+  }
+  const results = [];
+  for (const bucket of buckets) {
+    const file = {};
+    try {
+      for (const who of ["A", "B"]) {
+        const user = USERS[who].id;
+        file[who] = (await db.query(`insert into storage.objects (bucket_id, name, owner, owner_id) values ($1, $2, $3::uuid, $3::text) returning id`,
+          [bucket.id, `${user}/rls-probe-${who.toLowerCase()}.txt`, user])).rows[0]?.id;
+      }
+    } catch (error) {
+      // A trigger or a changed storage table: the bucket is listed as not probed.
+      results.push({ bucket: bucket.id, public: bucket.public, assumed: Boolean(bucket.assumed), skipped: error.message });
+      continue;
+    }
+    if (!file.A) {
+      results.push({ bucket: bucket.id, public: bucket.public, assumed: Boolean(bucket.assumed), skipped: "a trigger dropped the file before it was stored" });
+      continue;
+    }
+    const result = { bucket: bucket.id, public: bucket.public, assumed: Boolean(bucket.assumed) };
+    for (const who of ["anon", "B", "A"]) {
+      result[who] = await session(db, who, async (as) => {
+        const read = await as("select id from storage.objects where id = $1", [file.A]);
+        const update = await as("update storage.objects set metadata = coalesce(metadata, '{}'::jsonb) where id = $1", [file.A]);
+        const del = await as("delete from storage.objects where id = $1", [file.A]);
+        // An upload names its path, and the storage server sets owner to whoever is signed in.
+        const insert = await as("insert into storage.objects (bucket_id, name, owner, owner_id) values ($1, $2, $3::uuid, $3::text)",
+          [bucket.id, `${USERS.A.id}/rls-probe-from-${who.toLowerCase()}.txt`, who === "anon" ? null : USERS[who].id]);
+        return { read: read.rows.length > 0, update: update.affected > 0, delete: del.affected > 0, insert: insert.ok };
+      });
+    }
+    results.push(result);
+  }
+  return { rls, buckets: results, policies };
+}
