@@ -229,7 +229,13 @@ async function tryFixes({ migrations, report, snapshot, migrated, fixes }) {
   const failed = after.load.failed.filter((x) => x.file === FIX_FILE).map((x) => x.statement);
   const closes = (f) => !after.findings.some((x) => x.kind === f.kind && x.where === f.where)
     && !f.sql.split(/;$/m).filter((s) => s.trim()).some((s) => failed.some((p) => sameStatement(p, s)));
-  const appeared = after.findings.filter((x) => x.severity !== "review" && !report.findings.some((y) => y.kind === x.kind && y.where === x.where));
+  // New problems only: not ones the report already had or accepted, and not functions it
+  // called and judged, since a try doesn't call them (one that refused every call isn't a
+  // finding, but would look like one uncalled).
+  const known = [...report.findings, ...(report.accepted ?? [])];
+  const called = new Set((report.functions ?? []).map((f) => `${f.name}(${f.args})`));
+  const appeared = after.findings.filter((x) => x.severity !== "review" && !known.some((y) => y.kind === x.kind && y.where === x.where)
+    && !(x.kind === "definer-function" && called.has(x.where)));
   const lockedDown = new Set(fixes.filter((f) => f.lockdown).map((f) => f.where));
   return { closes, harm: [...ownerLosses(report, after).filter((h) => !lockedDown.has(h.where)), ...appeared.map((x) => ({ what: x.kind, where: x.where }))] };
 }

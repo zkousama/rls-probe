@@ -4,7 +4,10 @@ import { CHECKS_CALLER } from "./schema.js";
 export const SENSITIVE = /(email|phone|address|latitude|longitude|zip_code|postal|password|token|secret|iban|ssn|birth|salary|stripe|customer_id|api_key)/i;
 export const ORDER = { critical: 0, high: 1, medium: 2, review: 3 };
 // Errors that mean "you may not": a function turning a caller away.
-const REFUSED = /permission|not authori[sz]ed|unauthori[sz]ed|denied|forbidden|not allowed|only|must be signed|sign in|log ?in|insufficient/i;
+const REFUSED = /\b(permission|not authori[sz]ed|unauthori[sz]ed|denied|forbidden|not allowed|only|must be signed|sign in|log ?in|insufficient)\b/i;
+// A function that fails because something it uses is missing is broken, not guarded, whatever
+// the missing column is called (last_login).
+const BROKEN = /does not exist/i;
 const TALLY = /(count|views?|likes?|votes?|score|clicks?|plays?|hits?|visits?|seconds|minutes|duration|attempts|usage|streak|updated_at|last_seen|last_active|last_\w+_at)/i;
 // Tables a function writes a record to, about whoever it was called for.
 const LOG = /(^|_)(logs?|audits?|audit_log|events?|alerts?|history|activity|activities|sessions?|attempts)$/i;
@@ -87,7 +90,7 @@ export function findingsFrom(results, views, functions, buckets, storage, guards
     const tried = !by && !leak && !counted && Object.values(f.calls ?? {}).some((c) => c.ok);
     // Every call refused, saying the caller isn't allowed: the function guards itself.
     const calls = Object.values(f.calls ?? {});
-    const refusal = calls.length && calls.every((c) => !c.ok && REFUSED.test(c.error ?? "")) ? calls[0].error : null;
+    const refusal = calls.length && calls.every((c) => !c.ok && REFUSED.test(c.error ?? "") && !BROKEN.test(c.error ?? "")) ? calls[0].error : null;
     // It turned every caller away and nothing suggests otherwise: not worth anyone's time.
     if (refusal && !leak) continue;
     const caller = who === "anon" ? "visitors who aren't signed in" : "any signed-in user";

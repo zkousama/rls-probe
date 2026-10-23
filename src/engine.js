@@ -80,7 +80,7 @@ export async function runProbe({ migrations, code = [], grants = "legacy", oct30
   // What the app's code and migrations say each finding was meant to be. An explicit
   // "meant for everyone" makes it something to check rather than a problem.
   if (code.length || migrations.length) {
-    const intent = readIntent(report, code, migrations);
+    const intent = readIntent(report, code, migrations, functions);
     for (const f of report.findings) {
       const said = intent[findingId(f)];
       if (!said) continue;

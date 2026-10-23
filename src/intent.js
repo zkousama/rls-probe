@@ -30,8 +30,9 @@ const CLOSED_WORDS = /\b(server[- ]only|service[ _]role only|no application code
 const READS = new Set(["rls-off", "rls-off-users", "visitor-read", "user-read", "view-bypass", "storage-visitor-read", "storage-user-read", "public-bucket"]);
 
 // code: [{ path, text }]. migrations: [{ name, sql }]. Returns { [finding id]: { verdict, reasons } }.
-export function readIntent(report, code, migrations) {
+export function readIntent(report, code, migrations, functions = []) {
   const use = usage(code);
+  throughFunctions(use, functions, report);
   const out = {};
   // Whether any code hands the public key to a client that runs as a visitor or user.
   const publicKey = code.some((f) => !TYPES_FILE.test(f.path) && /SUPABASE_(ANON|PUBLISHABLE)_KEY|supabase(Anon|Publishable)Key|createBrowserClient|anonKey/i.test(f.text));
@@ -48,6 +49,8 @@ function judge(f, report, use, migrations, publicKey) {
   const name = f.kind === "definer-function" ? f.function : f.bucket ?? f.where;
   const u = (f.kind === "definer-function" ? use.rpc : f.bucket ? use.storage : use.tables).get(name) ?? { user: [], admin: [] };
   const at = (x) => `${x.path}:${x.line}`;
+  // How the app reaches it: with the public key, or through a function that runs as the caller.
+  const how = (x) => (x.via ? ` through ${x.via}() (${at(x)}), which runs as the caller` : ` with the public key (${at(x)})`);
 
   // What the migrations say about it, next to where it's made and its policies.
   const said = hints(f, report, migrations);
@@ -77,7 +80,8 @@ function judge(f, report, use, migrations, publicKey) {
 
   // Named in user-facing code but not in a call rls-probe can read (a data provider's
   // resource): the app may use it through the API, so "server only" can't be concluded.
-  const named = !u.user.length && use.named(name);
+  // (Reads through a function the app calls don't tell what the code does with it directly.)
+  const named = !u.user.some((x) => !x.via) && use.named(name);
   if (named) return { verdict: "unclear", reasons: [`the app names "${name}" (${at(named)}) in a way rls-probe can't follow, so it may read or change it through the API`, ...reasons] };
   // Only the service role or plain SQL from server code reaches it: nobody else needed access.
   const sql = !f.bucket && use.sql(name);
@@ -102,7 +106,7 @@ function judge(f, report, use, migrations, publicKey) {
     if (/^visitor-|^storage-visitor-|^rls-off$/.test(f.kind) && reads.length && reads.every((x) => x.signedIn)) {
       return { verdict: "mistake", reasons: [`the app reads ${name} only after sign-in (${at(reads[0])}), so visitors don't need it`, ...reasons] };
     }
-    return { verdict: "unclear", reasons: [`the app reads ${name} with the public key (${at(reads[0] ?? u.user[0])}); whether others' rows are meant to show depends on what it's for`, ...reasons] };
+    return { verdict: "unclear", reasons: [`the app reads ${name}${how(reads[0] ?? u.user[0])}; whether others' rows are meant to show depends on what it's for`, ...reasons] };
   }
 
   // Adding rows without signing in: a form, if the app does it before sign-in.
@@ -114,7 +118,7 @@ function judge(f, report, use, migrations, publicKey) {
   }
   const ownWrites = owner && writes.length && writes.every((x) => x.filters.includes(owner));
   if (ownWrites) return { verdict: "mistake", reasons: [`the app only changes users' own rows (${at(writes[0])} filters on ${owner}), so changing others' isn't needed`, ...reasons] };
-  return { verdict: "unclear", reasons: [`the app ${writes.length ? `writes to ${name} with the public key (${at(writes[0])})` : `uses ${name} with the public key (${at(u.user[0])})`}; whether others may do the same depends on what it's for`, ...reasons] };
+  return { verdict: "unclear", reasons: [`the app ${writes.length ? `writes to ${name}${how(writes[0])}` : `uses ${name}${how(u.user[0])}`}; whether others may do the same depends on what it's for`, ...reasons] };
 }
 
 // What the migrations say about a finding: the names of the policies that grant the
@@ -173,6 +177,29 @@ function commentsAt(lines, line) {
 
 // Every supabase-js call in the code, by table, bucket and function: where, with which
 // key, what it does, what it filters on, and whether it runs after sign-in.
+// A function the app calls runs as the visitor or user calling it, unless it's security
+// definer: the tables it reads and writes are then used by the app through the API, as
+// that caller. Recorded like the app's own calls, at the line that calls the function.
+function throughFunctions(use, functions, report) {
+  for (const fn of functions) {
+    const calls = use.rpc.get(fn.name)?.user ?? [];
+    if (fn.definer || !calls.length || !fn.body) continue;
+    for (const { table } of report.results) {
+      const after = (verb) => new RegExp(`\\b${verb}\\s+(?:"?public"?\\.)?"?${table.replace(/\W/g, "\\$&")}"?(?![\\w"])`, "i").test(fn.body);
+      const ops = new Set([
+        ...(after("(?:from|join)") ? ["select"] : []),
+        ...(after("insert\\s+into") ? ["insert"] : []),
+        ...(after("update") ? ["update"] : []),
+        ...(after("delete\\s+from") ? ["delete"] : []),
+      ]);
+      if (!ops.size) continue;
+      const e = use.tables.get(table) ?? { user: [], admin: [] };
+      for (const c of calls) e.user.push({ ...c, ops, filters: [], via: fn.name });
+      use.tables.set(table, e);
+    }
+  }
+}
+
 function usage(code) {
   const tables = new Map();
   const storage = new Map();

@@ -44,14 +44,14 @@ export function declareParts(report, project, el, { check, download }) {
   const questions = asked.map(([name, verb]) => {
     const row = el("div", { className: "question" });
     row.append(el("p", { className: "font-semibold" }, `Who should be able to ${doing([verb], name)}?`),
-      ...(why[name] ? [el("p", { className: "text-[0.9rem] text-muted" }, `What the code shows: ${why[name]}.`)] : []),
+      ...(why[name] ? [el("p", { className: "text-[0.9rem] text-muted" }, `What the code shows: ${end(why[name])}`)] : []),
       choose(name, verb, row));
     return row;
   });
 
   const filled = Object.entries(answers).filter(([name, verbs]) => Object.values(verbs).some((l) => l !== null)).map(([name, verbs]) => el("div", { className: "question" },
     el("p", { className: "font-semibold font-mono text-[0.9rem]" }, name.replace(/^function:/, "function ").replace(/^bucket:/, "bucket ")),
-    ...(why[name] ? [el("p", { className: "text-[0.9rem] text-muted" }, `${why[name].charAt(0).toUpperCase()}${why[name].slice(1)}.`)] : []),
+    ...(why[name] ? [el("p", { className: "text-[0.9rem] text-muted" }, end(`${why[name].charAt(0).toUpperCase()}${why[name].slice(1)}`))] : []),
     ...Object.entries(verbs).filter(([, l]) => l !== null).map(([verb]) => el("div", { className: "mt-2" },
       el("p", { className: "text-[0.9rem]" }, `Who may ${doing([verb], name)}`), choose(name, verb, null))),
   ));
@@ -88,6 +88,11 @@ export function recheck(report, entries) {
   const next = { ...report, findings, accepted: [...base.accepted.filter((f) => !f.declared), ...accepted], access: { comparison, problems: [] } };
   Object.defineProperty(next, "undeclared", { value: base, enumerable: false });
   return next;
+}
+
+// A sentence's full stop, unless it already ends in one or a question mark.
+function end(text) {
+  return /[.?!]$/.test(text) ? text : `${text}.`;
 }
 
 function parse(text) {

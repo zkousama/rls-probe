@@ -208,7 +208,7 @@ In Cursor, Windsurf, Claude Desktop or any other MCP client, add the server:
 ```json
 {
   "mcpServers": {
-    "rls-probe": { "command": "npx", "args": ["-y", "rls-probe@0.10.0", "mcp"] }
+    "rls-probe": { "command": "npx", "args": ["-y", "rls-probe@0.10.1", "mcp"] }
   }
 }
 ```
@@ -427,10 +427,10 @@ checked.
 
 On 25 open-source apps built with Lovable, Bolt or by hand (7 to 671 migration
 files each), every run finishes, most in 2 to 4 seconds. Testing the fixes as well
-(`--test-fixes`, `--prompt`, `--fix-policies`) takes 4 to 36 seconds, 8 for the median
+(`--test-fixes`, `--prompt`, `--fix-policies`) takes 2 to 38 seconds, 5 for the median
 app, and stops after three minutes on the largest (402 tables), leaving the fixes it
-didn't get to marked untested. Of the 353 fixes proposed for the other 24 apps, 351
-passed.
+didn't get to marked untested. Of the 348 fixes proposed for the other 24 apps, 346
+passed (0.10.1).
 
 ## Limits
 

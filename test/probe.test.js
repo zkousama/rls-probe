@@ -514,6 +514,39 @@ create policy "anyone reads avatars" on storage.objects for select using (bucket
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+// Trying fixes doesn't call functions again, so a function that refused every call in the
+// inspection (and so isn't a finding) mustn't count as a new problem in each try. An error
+// about a column called last_login isn't a refusal, though: that function is just broken.
+test("a function that refused its calls doesn't fail every fix, and a broken one isn't a refusal", async () => {
+  const { runProbe } = await import("../src/engine.js");
+  const { verifyFixes } = await import("../src/fixes.js");
+  const { baseSnapshot } = await import("../src/snapshot.js");
+  const snapshot = await baseSnapshot();
+  const migrations = [{ name: "20250101000000_app.sql", sql: `
+create table public.notes (id uuid primary key default gen_random_uuid(), user_id uuid not null references auth.users (id), body text);
+alter table public.notes enable row level security;
+create policy "own notes" on public.notes for all to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
+create policy "anyone reads notes" on public.notes for select to anon using (true);
+create function public.clear_notes(p_user uuid) returns void language plpgsql security definer as $$
+begin
+  if current_setting('app.maintenance', true) is distinct from 'on' then raise exception 'not allowed'; end if;
+  update public.notes set body = null where user_id = p_user;
+end $$;
+-- Broken: notes has no last_login, so every call fails.
+create function public.record_login(p_user uuid) returns void language plpgsql security definer as $$
+begin
+  update public.notes set last_login = now() where user_id = p_user;
+end $$;
+` }];
+  const report = await runProbe({ migrations, snapshot, keep: true });
+  const functions = report.findings.filter((f) => f.kind === "definer-function").map((f) => f.function);
+  assert.deepEqual(functions, ["record_login"], "clear_notes refused every call; record_login only failed");
+  const fixes = await verifyFixes({ migrations, report, snapshot });
+  assert.ok(fixes.some((f) => f.where === "notes"));
+  assert.deepEqual(fixes.filter((f) => !f.verified).map((f) => `${f.kind}:${f.where}`), []);
+  assert.ok(fixes.some((f) => f.kind === "definer-function" && f.verified), "record_login's revoke passes too");
+});
+
 // What a key looks like isn't a key: another service's sk- key, a placeholder, code that
 // strips a PEM header, an example env file. A real OpenAI key and a real private key are.
 test("look-alike keys aren't reported; real ones are", async () => {
@@ -577,6 +610,32 @@ test("the app's code and migrations say what each finding was meant to be", () =
 // Step 2: rls-probe.json declares who may see, add and change rows in each table. rls-probe
 // drafts it from the app's code, asks only what the code can't tell, and then checks the
 // database against it.
+// A function the app calls runs as the caller unless it's security definer, so the tables
+// it reads are read by the app's visitors and users: reading them isn't "not needed".
+test("tables read through a function the app calls count as used by the app", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rls-probe-via-"));
+  fs.cpSync(fileURLToPath(new URL("./fixtures/intent", import.meta.url)), dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "supabase/migrations/20250103000000_scores.sql"), `create table public.scores (id bigint generated always as identity primary key, player text not null, points int not null);
+create function public.top_scores() returns setof public.scores language sql stable as $$ select * from public.scores order by points desc limit 10 $$;
+create table public.ledger (id bigint generated always as identity primary key, amount int not null);
+create function public.ledger_total() returns bigint language sql stable security definer as $$ select sum(amount) from public.ledger $$;
+`);
+  fs.writeFileSync(path.join(dir, "src/pages/Scores.tsx"), `import { supabase } from "../lib/supabase";
+export async function load() {
+  const top = await supabase.rpc("top_scores");
+  const total = await supabase.rpc("ledger_total");
+  return { top, total };
+}
+`);
+  const { report } = run(dir);
+  const scores = report.findings.find((f) => f.kind === "rls-off" && f.where === "scores");
+  assert.equal(scores.intent.verdict, "unclear");
+  assert.match(scores.intent.reasons[0], /through top_scores\(\) \(src\/pages\/Scores\.tsx:3\), which runs as the caller/);
+  const ledger = report.findings.find((f) => f.kind === "rls-off" && f.where === "ledger");
+  assert.equal(ledger.intent.verdict, "mistake", "ledger_total() runs as its owner, so callers never needed the table");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test("--draft-access answers what the code shows and asks the rest, keeping existing answers", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rls-probe-draft-"));
   fs.cpSync(fileURLToPath(new URL("./fixtures/intent", import.meta.url)), dir, { recursive: true });
