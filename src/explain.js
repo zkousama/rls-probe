@@ -1,13 +1,14 @@
 // What a report means for someone who doesn't read SQL, and what to ask an AI
 // builder (Lovable, Bolt, Cursor, Claude) to change. Every sentence comes from the
 // report: the policy names, owner columns and grants are the app's own.
+import { teamReach } from "./report.js";
 
 const SEE = { read: "see", update: "change", delete: "delete", insert: "add" };
 const CMD = { read: "SELECT", update: "UPDATE", delete: "DELETE", insert: "INSERT" };
 const LABEL = { critical: "CRITICAL", high: "HIGH", medium: "MEDIUM", review: "CHECK" };
 
 export function explain(report) {
-  const items = report.findings.map((f) => ({ severity: f.severity, where: f.where, ...say(f, report), selfFix: selfFix(f, report) }));
+  const items = report.findings.map((f) => ({ severity: f.severity, kind: f.kind, where: f.where, ...say(f, report), selfFix: selfFix(f, report) }));
   const g = report.grantsChange;
   return {
     grade: grade(report),
@@ -16,6 +17,21 @@ export function explain(report) {
     notes: items.filter((i) => i.severity === "review"),
     grants: g ? grantsPart(g) : null,
     missing: report.load.missing ?? [],
+    team: teamPart(report),
+  };
+}
+
+// What a plain member of the same group can do with another member's rows: shown so
+// the owner can check it's what members should share, never counted as a problem.
+function teamPart(report) {
+  if (!report.teams?.length) return null;
+  const reach = teamReach(report.results);
+  const via = list(report.teams, "and");
+  return {
+    reach,
+    headline: reach.length
+      ? `Teammates: a plain member of the same group (through ${via}) can ${list(reach.map((t) => `${list(t.actions.map((a) => SEE[a]), "and")} ${t.table}`), "and")} of other members. Check that's what members should share.`
+      : `Teammates: a plain member of the same group (through ${via}) can't reach other members' rows anywhere. If members are meant to share, check the policies.`,
   };
 }
 
@@ -54,8 +70,10 @@ export function renderPlain(report) {
     out.push("");
   }
   if (e.grants) out.push(e.grants.headline, "");
+  if (e.team) out.push(e.team.headline, "");
   if (e.missing.length) out.push(`Not checked: ${e.missing.join(", ")}. Your migrations use these tables but never create them (were they made in the dashboard?).`, "");
   if (e.problems.length || e.grants?.lines.length) out.push("To fix them with Lovable, Bolt, Cursor or Claude: run rls-probe with --prompt and paste what it prints.", "");
+  if (e.problems.length) out.push("To write the fixes that pass rls-probe's own test as a migration: run it with --fix-policies.", "");
   return out.join("\n");
 }
 
@@ -69,7 +87,10 @@ export function fixPrompt(report) {
     "Keep every user able to see, change and delete their own data, and keep anything that is meant to be public working.",
     "",
   ];
-  e.problems.forEach((p, i) => out.push(`${i + 1}. ${p.headline}`, `   ${p.ask}`, ""));
+  e.problems.forEach((p, i) => {
+    out.push(`${i + 1}. ${p.headline}`, `   ${p.ask}`, "");
+    if (p.selfFix?.tested) out.push(`   rls-probe tested this SQL on a copy of the database. It closes the problem, and afterwards ${p.selfFix.effect}`, "", ...p.selfFix.code.split("\n").map((l) => `   ${l}`), "");
+  });
   if (e.grants?.lines.length) {
     out.push("Supabase no longer gives new tables access by default (from October 30, 2026). Add a migration with exactly these lines:", "", ...e.grants.lines, "");
     if (e.grants.holdBack.length) out.push(`Don't grant anon or authenticated anything on ${list(e.grants.holdBack, "or")} until the problems above are fixed.`, "");
@@ -93,6 +114,7 @@ export function renderMarkdown(report, details = "") {
     out.push("");
   }
   if (e.grants) out.push(e.grants.headline, "");
+  if (e.team) out.push(e.team.headline, "");
   if (e.missing.length) out.push(`Not checked: ${e.missing.map((t) => `\`${t}\``).join(", ")}. The migrations use these tables but never create them.`, "");
   if (e.problems.length || e.grants?.lines.length) {
     out.push("<details><summary>Fix prompt for Lovable, Bolt, Cursor or Claude</summary>", "", "```text", fixPrompt(report).trimEnd(), "```", "", "</details>", "");
@@ -181,11 +203,23 @@ function say(f, report) {
         headline: `The ${t} view shows its rows to anyone, skipping the rules on the tables underneath.`,
         ask: `Make the "${t}" view follow the tables' rules (alter view public.${t} set (security_invoker = true);), or check it shows nothing private.`,
       };
-    case "definer-function":
+    case "definer-function": {
+      const who = f.callers === "anyone" ? "anyone on the internet" : "any signed-in user";
+      // The worst thing the call did: deleting, then changing, then adding.
+      const did = ["deleted", "changed", "added"].map((how) => f.proof?.changed.find((c) => c.how === how)).find(Boolean);
       return {
-        headline: `The database function ${f.function}() runs with full rights, and ${f.callers === "anyone" ? "anyone on the internet" : "any signed-in user"} can call it${f.writes ? " to change data" : ""}.`,
+        headline: did?.how === "added"
+          ? `${capitalize(who)} can call the database function ${f.function}() to add rows to ${did.table} in other users' names: rls-probe tried it, and one was added for the test user. Fine if that's what it's for, like a public booking form.`
+          : did
+          ? `${capitalize(who)} can call the database function ${f.function}() to ${did.how === "deleted" ? "delete" : "change"} other users' ${did.table}: rls-probe tried it, and the test user's row in ${did.table} was ${did.how}.`
+          : f.leak
+            ? `${capitalize(who)} can call the database function ${f.function}() and get other users' private data back: rls-probe tried it.`
+            : f.counter
+              ? `${capitalize(who)} can call the database function ${f.function}(), which changes ${list(f.counter.columns.map(human), "and")} on other users' ${f.counter.table}. It looks like a counter: check that's all it does.`
+              : `The database function ${f.function}() runs with full rights, and ${who} can call it${f.writes ? " to change data" : ""}.${f.tried ? " rls-probe tried it on another user's rows and nothing changed." : ""}`,
         ask: `In ${f.function}, check that the caller is allowed (with auth.uid()) before it reads or changes anything, or stop ${f.callers === "anyone" ? "visitors and users" : "users"} calling it: revoke execute on function public.${t} from public, anon, authenticated; (revoking only from anon isn't enough: Postgres lets public run every function).`,
       };
+    }
     case "storage-visitor-write":
     case "storage-visitor-read":
     case "storage-user-write":
@@ -245,6 +279,11 @@ function say(f, report) {
 // what a policy allows is left to the request above. (Lovable Cloud projects have no
 // Supabase dashboard, so the request stays the main path.)
 function selfFix(f, report) {
+  // When the fixes were tested, a change to the database is offered only if it worked.
+  if (report.fixes && !["service-key", "secret", "browser-secret", "open-function"].includes(f.kind)) {
+    const fix = report.fixes.find((x) => x.kind === f.kind && x.where === f.where);
+    return fix?.verified ? { where: "SQL Editor", code: fix.sql, tested: true, effect: fix.effect } : null;
+  }
   const t = f.where;
   switch (f.kind) {
     case "rls-off":

@@ -1,0 +1,238 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>rls-probe diagrams</title>
+<style>
+  @font-face { font-family: Virgil; src: url(https://cdn.jsdelivr.net/npm/@excalidraw/excalidraw@0.18.0/dist/prod/fonts/Virgil/Virgil-Regular.woff2) format("woff2"); }
+  body { margin: 0; padding: 20px; background: #f1f3f5; }
+  svg { display: block; margin: 0 0 30px; }
+  /* Excalidraw's own dark mode: the light drawing, inverted and turned back to its hues. */
+  body.dark svg { filter: invert(93%) hue-rotate(180deg); }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/roughjs@4.6.6/bundled/rough.js"></script>
+<!-- The diagrams in site/public/diagrams (README and web page): open this page, then
+     screenshot each drawing at 2x. Add class="dark" to <body> for the dark versions. -->
+</head>
+<body>
+<svg id="how"></svg>
+<svg id="trap"></svg>
+<svg id="reach"></svg>
+<svg id="fixes"></svg>
+<script>
+const NS = "http://www.w3.org/2000/svg";
+const C = { ink: "#1e1e1e", grey: "#868e96", red: "#e03131", green: "#2f9e44", blue: "#1971c2",
+  blueFill: "#a5d8ff", greenFill: "#b2f2bb", redFill: "#ffc9c9", yellowFill: "#ffec99", violetFill: "#d0bfff" };
+
+function scene(id, w, h, draw) {
+  const svg = document.getElementById(id);
+  svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  svg.setAttribute("width", w);
+  svg.setAttribute("height", h);
+  const bg = document.createElementNS(NS, "rect");
+  Object.entries({ width: w, height: h, fill: "#ffffff" }).forEach(([k, v]) => bg.setAttribute(k, v));
+  svg.append(bg);
+  const rc = rough.svg(svg);
+  let seed = 7;
+  const style = (o = {}) => ({ seed: seed++, roughness: o.rough ?? 1.1, bowing: 1, stroke: o.stroke ?? C.ink, strokeWidth: o.sw ?? 2,
+    fill: o.fill, fillStyle: o.fillStyle ?? "hachure", hachureGap: o.gap ?? 7, fillWeight: 1.3, hachureAngle: o.angle ?? -41,
+    strokeLineDash: o.dash ? [10, 9] : undefined });
+  const add = (node, o = {}) => {
+    if (o.rotate) node.setAttribute("transform", `rotate(${o.rotate} ${o.cx} ${o.cy})`);
+    svg.append(node);
+    return node;
+  };
+  const api = {
+    box(x, y, bw, bh, o = {}) {
+      const r = o.r ?? 14;
+      const d = `M ${x + r} ${y} L ${x + bw - r} ${y} Q ${x + bw} ${y} ${x + bw} ${y + r} L ${x + bw} ${y + bh - r} Q ${x + bw} ${y + bh} ${x + bw - r} ${y + bh} L ${x + r} ${y + bh} Q ${x} ${y + bh} ${x} ${y + bh - r} L ${x} ${y + r} Q ${x} ${y} ${x + r} ${y} Z`;
+      return add(rc.path(d, style(o)), { ...o, cx: x + bw / 2, cy: y + bh / 2 });
+    },
+    ellipse(cx, cy, ew, eh, o = {}) { return add(rc.ellipse(cx, cy, ew, eh, style(o))); },
+    line(x1, y1, x2, y2, o = {}) { return add(rc.line(x1, y1, x2, y2, style(o))); },
+    path(d, o = {}) { return add(rc.path(d, style(o))); },
+    arrow(x1, y1, x2, y2, o = {}) {
+      // A gentle bend, like a hand-drawn arrow, and an open head.
+      const mx = (x1 + x2) / 2 + (o.bend ?? 0) * (y2 - y1) * -0.15;
+      const my = (y1 + y2) / 2 + (o.bend ?? 0) * (x2 - x1) * 0.15;
+      add(rc.curve([[x1, y1], [mx, my], [x2, y2]], style(o)));
+      const a = Math.atan2(y2 - my, x2 - mx);
+      for (const s of [-1, 1]) {
+        const t = a + Math.PI + s * 0.45;
+        add(rc.line(x2, y2, x2 + 18 * Math.cos(t), y2 + 18 * Math.sin(t), style({ ...o, dash: false })));
+      }
+    },
+    text(x, y, str, o = {}) {
+      const t = document.createElementNS(NS, "text");
+      const size = o.size ?? 26;
+      Object.entries({ x, y, "font-family": "Virgil", "font-size": size, fill: o.color ?? C.ink, "text-anchor": o.anchor ?? "middle" })
+        .forEach(([k, v]) => t.setAttribute(k, v));
+      str.split("\n").forEach((line, i) => {
+        const span = document.createElementNS(NS, "tspan");
+        span.setAttribute("x", x);
+        span.setAttribute("dy", i === 0 ? 0 : size * 1.25);
+        span.textContent = line;
+        t.append(span);
+      });
+      if (o.rotate) t.setAttribute("transform", `rotate(${o.rotate} ${x} ${y})`);
+      return add(t);
+    },
+    check(x, y, s = 1, color = C.green) {
+      api.path(`M ${x} ${y} L ${x + 10 * s} ${y + 11 * s} L ${x + 28 * s} ${y - 12 * s}`, { stroke: color, sw: 3.2 * Math.min(s, 1.3), rough: 0.8 });
+    },
+    cross(x, y, s = 1, color = C.red) {
+      api.line(x, y, x + 22 * s, y + 22 * s, { stroke: color, sw: 3.2, rough: 0.8 });
+      api.line(x + 22 * s, y, x, y + 22 * s, { stroke: color, sw: 3.2, rough: 0.8 });
+    },
+    // A person: a head and shoulders.
+    person(cx, cy, fill, label, o = {}) {
+      api.ellipse(cx, cy - 34, 40, 40, { fill, fillStyle: "solid", dash: o.dash });
+      api.path(`M ${cx - 34} ${cy + 36} Q ${cx - 34} ${cy - 6} ${cx} ${cy - 6} Q ${cx + 34} ${cy - 6} ${cx + 34} ${cy + 36} Z`, { fill, fillStyle: "solid", dash: o.dash });
+      api.text(cx, cy + 66, label, { size: 22 });
+    },
+    // A database: a cylinder.
+    db(cx, top, dw, dh, fill, label) {
+      api.path(`M ${cx - dw / 2} ${top} L ${cx - dw / 2} ${top + dh} A ${dw / 2} ${dw / 7} 0 0 0 ${cx + dw / 2} ${top + dh} L ${cx + dw / 2} ${top}`, { fill, gap: 9 });
+      api.ellipse(cx, top, dw, (dw / 7) * 2, { fill: "#ffffff", fillStyle: "solid" });
+      if (label) api.text(cx, top + dh / 2 + 18, label, { size: 26 });
+    },
+  };
+  draw(api);
+}
+
+// 1. How an inspection works.
+scene("how", 1400, 600, (d) => {
+  d.text(40, 64, "How rls-probe checks a Supabase app", { size: 40, anchor: "start" });
+  // Migrations: a small stack of files.
+  for (const [i, off] of [[0, 24], [1, 12], [2, 0]]) d.box(70 + off, 170 - off, 200, 230, { fill: "#ffffff", fillStyle: "solid", r: 8 });
+  d.text(170, 222, "create table", { size: 20, color: C.blue });
+  d.text(170, 252, "orders (...)", { size: 20 });
+  d.text(170, 302, "create policy", { size: 20, color: C.blue });
+  d.text(170, 332, "on orders ...", { size: 20 });
+  d.text(170, 455, "your migrations", { size: 28 });
+  d.text(170, 490, "from a GitHub link,\na folder or a ZIP", { size: 20, color: C.grey });
+
+  d.arrow(310, 285, 400, 285);
+
+  d.db(520, 190, 200, 190, C.blueFill, "Postgres");
+  d.text(520, 455, "rebuilt in your browser", { size: 28 });
+  d.text(520, 490, "nothing uploaded, your\nlive database untouched", { size: 20, color: C.grey });
+
+  d.arrow(640, 285, 730, 285);
+
+  // The test: A owns rows, B and a visitor try them.
+  d.box(900, 140, 150, 110, { fill: C.greenFill, r: 10 });
+  d.text(975, 185, "A's rows", { size: 24 });
+  d.text(975, 220, "in every table", { size: 18, color: C.grey });
+  d.person(790, 200, C.greenFill, "user A");
+  d.person(790, 345, C.redFill, "user B");
+  d.person(1000, 345, "#ffffff", "a visitor", { dash: true });
+  d.arrow(830, 318, 920, 262, { stroke: C.red, dash: true });
+  d.arrow(992, 292, 985, 262, { stroke: C.red, dash: true });
+  d.text(905, 455, "two users move in", { size: 28 });
+  d.text(905, 490, "B and a visitor try A's rows:\nsee? change? delete? add?", { size: 20, color: C.red });
+
+  d.arrow(1080, 285, 1150, 285);
+
+  // The grade card.
+  d.box(1170, 160, 180, 230, { stroke: C.red, sw: 3, fill: "#fff5f5", fillStyle: "solid", rotate: -4, r: 10 });
+  d.text(1260, 200, "inspection", { size: 20, color: C.red, rotate: -4 });
+  d.text(1262, 330, "F", { size: 130, color: C.red, rotate: -4 });
+  d.text(1260, 455, "a grade, A to F", { size: 28 });
+  d.text(1260, 490, "and a tested fix\nfor each problem", { size: 20, color: C.grey });
+});
+
+// 2. The October 30 trap.
+scene("trap", 1400, 560, (d) => {
+  d.text(40, 64, "October 30: new Supabase tables start closed", { size: 40, anchor: "start" });
+  d.box(40, 230, 210, 100, { fill: C.yellowFill });
+  d.text(145, 290, "a new table", { size: 28 });
+  d.arrow(260, 280, 330, 280);
+  d.box(340, 215, 300, 130, { fill: C.redFill });
+  d.text(490, 268, "your app shows nothing:", { size: 24 });
+  d.text(490, 305, "permission denied (42501)", { size: 22, color: C.red });
+
+  d.arrow(650, 250, 780, 165, { bend: 0.6, stroke: C.red });
+  d.text(690, 150, "the forum fix:\ngrant all to everyone", { size: 21, color: C.red, anchor: "end" });
+  d.box(790, 100, 560, 130, { fill: C.redFill });
+  d.cross(820, 145, 1.4);
+  d.text(1095, 155, "the table opens to every visitor", { size: 27 });
+  d.text(1095, 195, "when its row-level security is off or too loose", { size: 19, color: C.grey });
+
+  d.arrow(650, 310, 780, 395, { bend: -0.6, stroke: C.green });
+  d.text(700, 435, "rls-probe: grant only\nwhat's safe, fix the rest", { size: 21, color: C.green, anchor: "end" });
+  d.box(790, 330, 560, 130, { fill: C.greenFill });
+  d.check(816, 397, 1.4);
+  d.text(1095, 385, "the app works, nothing leaks", { size: 27 });
+  d.text(1095, 425, "each table gets the grants its rules already limit", { size: 19, color: C.grey });
+
+  d.text(40, 530, "Tables you already have keep working. New projects have worked this way since May 30.", { size: 19, color: C.grey, anchor: "start" });
+});
+
+// 3. What "reached" means: row-level security is on, and B still gets in.
+scene("reach", 1400, 600, (d) => {
+  d.text(40, 64, "\"RLS is on\" isn't the same as \"users are kept apart\"", { size: 40, anchor: "start" });
+  // The table.
+  d.box(60, 150, 480, 250, { fill: "#ffffff", fillStyle: "solid", r: 8 });
+  d.text(300, 192, "orders", { size: 28 });
+  d.line(60, 212, 540, 212);
+  d.box(80, 230, 440, 64, { fill: C.greenFill, r: 8 });
+  d.text(300, 271, "A's order (user_id = A)", { size: 24 });
+  d.box(80, 312, 440, 64, { fill: C.redFill, r: 8 });
+  d.text(300, 353, "B's order (user_id = B)", { size: 24 });
+  // The policy at fault.
+  d.box(60, 425, 480, 140, { fill: C.yellowFill, r: 10 });
+  d.text(300, 462, "its policies, RLS on:", { size: 22 });
+  d.text(300, 500, "for select to authenticated using (true)", { size: 20, color: C.red });
+  d.text(300, 535, "for update to authenticated using (true)", { size: 20, color: C.red });
+
+  // What was tried on A's order, and what got through.
+  d.text(1010, 140, "what was tried on A's order", { size: 26 });
+  const cols = ["see", "change", "delete", "add"];
+  cols.forEach((c, i) => d.text(820 + i * 130, 200, c, { size: 24 }));
+  d.text(640, 268, "a visitor", { size: 24, anchor: "start" });
+  d.text(640, 358, "user B", { size: 24, anchor: "start" });
+  d.line(630, 220, 1370, 220, { rough: 0.6 });
+  d.line(630, 305, 1370, 305, { rough: 0.6, sw: 1 });
+  for (let i = 0; i < 4; i++) d.check(806 + i * 130, 262, 1);
+  d.cross(808, 343, 1.1);
+  d.cross(938, 343, 1.1);
+  d.check(1066, 352, 1);
+  d.check(1196, 352, 1);
+  d.arrow(560, 500, 770, 380, { stroke: C.red, bend: 0.5 });
+  d.text(1000, 450, "user B could see and change\nA's order: that's the leak", { size: 24, color: C.red });
+  d.check(640, 540, 0.8); d.text(680, 552, "blocked", { size: 20, anchor: "start" });
+  d.cross(800, 532, 0.9); d.text(836, 552, "reached another user's row", { size: 20, anchor: "start" });
+});
+
+// 4. How a fix gets tested before it's offered.
+scene("fixes", 1400, 560, (d) => {
+  d.text(40, 64, "Every fix is tested before you see it", { size: 40, anchor: "start" });
+  d.box(40, 170, 260, 180, { fill: C.yellowFill });
+  d.text(170, 222, "a fix for", { size: 26 });
+  d.text(170, 255, "each problem", { size: 26 });
+  d.text(170, 305, "as SQL", { size: 20, color: C.grey });
+  d.arrow(310, 260, 380, 260);
+  d.db(490, 185, 170, 150, C.blueFill, "a copy");
+  d.text(490, 395, "applied to a copy\nof your database", { size: 22, color: C.grey });
+  d.arrow(600, 260, 670, 260);
+  d.box(680, 150, 410, 220, { fill: "#ffffff", fillStyle: "solid" });
+  d.text(885, 195, "probed again", { size: 26 });
+  [["the problem is gone", 250], ["nothing new opened", 295], ["every owner keeps their rows", 340]].forEach(([t, y]) => {
+    d.check(705, y - 12, 0.75);
+    d.text(745, y, t, { size: 22, anchor: "start" });
+  });
+  d.arrow(1100, 225, 1160, 190, { stroke: C.green });
+  d.box(1170, 120, 210, 120, { fill: C.greenFill });
+  d.text(1275, 172, "offered,", { size: 26 });
+  d.text(1275, 208, "marked tested", { size: 26 });
+  d.arrow(1100, 300, 1160, 345, { stroke: C.red, dash: true });
+  d.box(1170, 290, 210, 140, { fill: C.redFill, dash: true });
+  d.text(1275, 340, "a check fails:", { size: 22 });
+  d.text(1275, 375, "held back, you get", { size: 20, color: C.grey });
+  d.text(1275, 403, "the plain request", { size: 20, color: C.grey });
+  d.text(40, 520, "Example it caught: revoking is_staff() looked right, but the invoices policy calls it, so owners would lose their invoices.", { size: 19, color: C.grey, anchor: "start" });
+});
+</script>
+</body>
+</html>

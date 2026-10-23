@@ -1,4 +1,5 @@
 ---
+import Diagram from "../components/Diagram.astro";
 import Base from "../layouts/Base.astro";
 const base = import.meta.env.BASE_URL;
 ---
@@ -17,6 +18,7 @@ const base = import.meta.env.BASE_URL;
 
     <h2>The quick fix that leaks data</h2>
     <p>The fix going around is to grant everything, on every table, to everyone. On a table whose row-level security is off, or whose policy says <code>using (true)</code>, that grant is exactly what lets anyone read or change every row.</p>
+    <Diagram name="trap" alt="A new table answers permission denied (42501). Granting everything to everyone opens it to every visitor when its row-level security is loose; granting only what's safe keeps the app working with nothing leaking." />
 
     <h2>The fix that doesn't</h2>
     <p>Grant each table only what its policies need, in the same migration that creates it:</p>

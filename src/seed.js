@@ -6,6 +6,8 @@ export const USERS = {
   A: { id: "00000000-0000-4000-8000-00000000000a", email: "alice@example.com" },
   B: { id: "00000000-0000-4000-8000-00000000000b", email: "bob@example.com" },
   C: { id: "00000000-0000-4000-8000-00000000000c", email: "carol@example.com" },
+  // A's teammate: a plain member of whatever group A belongs to.
+  D: { id: "00000000-0000-4000-8000-00000000000d", email: "dana@example.com" },
 };
 
 export async function seed(db, tables) {
@@ -89,7 +91,66 @@ export async function seed(db, tables) {
       }
     }
   }
-  return { known, problems };
+  return { known, problems, teams: await seedTeammate(db, real, known, () => ++counter) };
+}
+
+// Tables that put a user in a group: organization members, team members, workspace users.
+const MEMBERSHIP = /(members?|memberships?|participants?|collaborators?|teammates?|employees?)$|^(organi[sz]ation|org|team|workspace|company|tenant|account|group|household|business|project)s?_users?$|^users?_(organi[sz]ation|org|team|workspace|company|tenant|account|group|household|business)s?$/i;
+
+// D joins each group A is in, through the same membership tables, with the plainest
+// role (the seed's choice of label for any role column). What D can then do with A's
+// rows is reported as what teammates share, and fixes must leave it working. Returns
+// the membership tables D was added to.
+async function seedTeammate(db, real, known, next) {
+  const teams = [];
+  const byName = new Map(real.map((t) => [t.name, t]));
+  for (const table of real) {
+    if (!MEMBERSHIP.test(table.name) || ROLE_TABLE.test(table.name)) continue;
+    // The member: a user column, or a profile keyed by the user's id. The group: any other parent.
+    const member = table.fks.find((fk) => !fk.audit && (fk.refSchema === "auth" && fk.refTable === "users" || keyedByUser(byName.get(fk.refTable))));
+    const groups = table.fks.filter((fk) => fk !== member && !fk.audit && fk.refSchema === "public" && fk.refTable !== table.name && !keyedByUser(byName.get(fk.refTable)));
+    const a = known.get(table.name)?.find((r) => r.owner === "A");
+    if (!member || !groups.length || !a || groups.some((fk) => a.row[fk.column] == null)) continue;
+    const same = (row) => groups.every((fk) => String(row[fk.column]) === String(a.row[fk.column]));
+    if (known.get(table.name).some((r) => r.owner === "D" && same(r.row))) continue;
+    const values = rowFor(table, "D", known, next());
+    if (!values) continue;
+    for (const fk of groups) values[fk.column] = a.row[fk.column];
+    // A member named by profile needs D's profile; it's the user's id either way.
+    if (member.refSchema === "public") values[member.column] = USERS.D.id;
+    const cols = Object.keys(values);
+    try {
+      const res = await db.query(`insert into ${q(table.name)} (${cols.map(q).join(", ")}) values (${cols.map((c, i) => `$${i + 1}::${typeOf(table, c)}`).join(", ")}) returning *`, cols.map((c) => values[c]));
+      if (res.rows[0]) {
+        known.get(table.name).push({ row: res.rows[0], owner: "D" });
+        teams.push(table.name);
+      }
+    } catch {
+      // No profile for D, a unique rule, a trigger: D isn't a teammate here.
+    }
+  }
+  return teams;
+}
+
+// How a table's rows belong to a group through a membership table: tasks.org_id names
+// an organization, and org_members says who is in it. For fixes that keep teammates in.
+export function groupRoutes(table, tables, teams) {
+  const byName = new Map(tables.map((t) => [t.name, t]));
+  const routes = [];
+  for (const name of teams) {
+    const members = byName.get(name);
+    const member = members.fks.find((fk) => !fk.audit && (fk.refSchema === "auth" && fk.refTable === "users" || keyedByUser(byName.get(fk.refTable))));
+    for (const group of members.fks.filter((fk) => fk !== member && !fk.audit && fk.refSchema === "public" && !keyedByUser(byName.get(fk.refTable)))) {
+      const link = table.fks.find((fk) => !fk.audit && fk.refSchema === "public" && fk.refTable === group.refTable && fk.refColumn === group.refColumn);
+      if (link && table.name !== name) routes.push({ members: name, groupColumn: group.column, userColumn: member.column, column: link.column });
+    }
+  }
+  return routes;
+}
+
+// A table whose key is the user's own id, like profiles.
+function keyedByUser(table) {
+  return Boolean(table && table.pk.length === 1 && table.fks.some((fk) => fk.column === table.pk[0] && fk.refSchema === "auth" && fk.refTable === "users"));
 }
 
 // A table belongs to users if a chain of foreign keys leads to auth.users.
@@ -111,14 +172,32 @@ export function ownerRoute(table, tables, seen = new Set()) {
   if (seen.has(table.name)) return null;
   seen.add(table.name);
   const direct = table.fks.find((fk) => !fk.audit && fk.refSchema === "auth" && fk.refTable === "users");
-  if (direct) return [{ column: direct.column, table: "auth.users" }];
+  if (direct) return [{ column: direct.column, table: "auth.users", refColumn: "id" }];
   for (const fk of table.fks) {
     if (fk.audit || fk.refSchema !== "public" || fk.refTable === table.name) continue;
     const parent = tables.find((t) => t.name === fk.refTable);
     const rest = parent && ownerRoute(parent, tables, seen);
-    if (rest) return [{ column: fk.column, table: parent.name }, ...rest];
+    if (rest) return [{ column: fk.column, table: parent.name, refColumn: fk.refColumn }, ...rest];
   }
   return null;
+}
+
+// Every column that ties a row to a user, directly or through one parent row: the
+// author and the recipient of a message alike. A row belongs to whoever any of them names.
+export function partyRoutes(table, tables) {
+  const routes = [];
+  for (const fk of table.fks) {
+    if (fk.audit) continue;
+    if (fk.refSchema === "auth" && fk.refTable === "users") {
+      routes.push([{ column: fk.column, table: "auth.users", refColumn: "id" }]);
+      continue;
+    }
+    if (fk.refSchema !== "public" || fk.refTable === table.name) continue;
+    const parent = tables.find((t) => t.name === fk.refTable);
+    const owner = parent?.fks.find((p) => !p.audit && p.refSchema === "auth" && p.refTable === "users");
+    if (owner && fk.refColumn) routes.push([{ column: fk.column, table: parent.name, refColumn: fk.refColumn }, { column: owner.column, table: "auth.users", refColumn: "id" }]);
+  }
+  return routes;
 }
 
 export function ownerOf(table, row, known) {

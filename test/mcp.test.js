@@ -39,12 +39,13 @@ test("the MCP server starts, lists its tools and checks an app", async () => {
   assert.equal(init.result.serverInfo.name, "rls-probe");
   mcp.notify("notifications/initialized");
   const tools = await mcp.request("tools/list", {});
-  assert.deepEqual(tools.result.tools.map((t) => t.name), ["check_supabase_security", "write_supabase_grants_migration"]);
+  assert.deepEqual(tools.result.tools.map((t) => t.name), ["check_supabase_security", "write_supabase_security_fixes", "write_supabase_grants_migration"]);
   const check = await mcp.request("tools/call", { name: "check_supabase_security", arguments: { path: "leaky" } });
   assert.equal(check.result.isError, false);
   assert.match(check.result.content[0].text, /^rls-probe: grade F\. 6 problems to fix/);
   assert.equal(check.result.structuredContent.grade, "F");
   assert.match(check.result.content[0].text, /## What to change/);
+  assert.match(check.result.content[0].text, /rls-probe tested this SQL on a copy of the database/);
   assert.equal(check.result.structuredContent.exitCode, 1);
   const missing = await mcp.request("tools/call", { name: "check_supabase_security", arguments: { path: "nowhere" } });
   assert.equal(missing.result.isError, true);
@@ -61,6 +62,18 @@ test("the MCP grants tool writes the safe grants as a migration", async () => {
   const wrote = await mcp.request("tools/call", { name: "write_supabase_grants_migration", arguments: {} });
   assert.match(wrote.result.content[0].text, /^Wrote .*_rls_probe_grants\.sql/);
   assert.match(wrote.result.content[0].text, /grant select, insert, update, delete on public\.notes to authenticated;/);
+  mcp.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("the MCP fixes tool writes the tested fixes as a migration", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rls-probe-mcp-"));
+  fs.cpSync(path.join(fixtures, "leaky"), dir, { recursive: true });
+  const mcp = connect(dir);
+  await mcp.request("initialize", { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "test", version: "1" } });
+  const wrote = await mcp.request("tools/call", { name: "write_supabase_security_fixes", arguments: {} });
+  assert.match(wrote.result.content[0].text, /^Wrote .*_rls_probe_security_fixes\.sql/);
+  assert.match(wrote.result.content[0].text, /revoke execute on function public\.delete_order\(order_id uuid\) from public, anon, authenticated;/);
   mcp.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });

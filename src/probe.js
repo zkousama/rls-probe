@@ -6,6 +6,8 @@ const AS = {
   // A on their own rows: what the app needs to keep working, not a finding.
   A: { role: "authenticated", claims: { sub: USERS.A.id, role: "authenticated", aud: "authenticated", email: USERS.A.email } },
   B: { role: "authenticated", claims: { sub: USERS.B.id, role: "authenticated", aud: "authenticated", email: USERS.B.email } },
+  // A's teammate, when the app has groups: what members share, not a finding.
+  D: { role: "authenticated", claims: { sub: USERS.D.id, role: "authenticated", aud: "authenticated", email: USERS.D.email } },
 };
 
 // Runs probes as a visitor or as user B inside one transaction that is rolled
@@ -44,7 +46,7 @@ function literal(text) {
   return `'${text.replace(/'/g, "''")}'`;
 }
 
-export async function probeTables(db, tables, known) {
+export async function probeTables(db, tables, known, { teammate = false } = {}) {
   const real = tables.filter((t) => t.kind === "r" || t.kind === "p");
   const results = [];
   for (const table of real) {
@@ -74,7 +76,7 @@ export async function probeTables(db, tables, known) {
     const setColumn = table.columns.find((c) => !table.pk.includes(c.name) && c.generated !== "s" && c.identity !== "a")?.name
       ?? table.columns.find((c) => c.generated !== "s" && c.identity !== "a")?.name;
 
-    for (const who of ["anon", "B", "A"]) {
+    for (const who of teammate ? ["anon", "B", "A", "D"] : ["anon", "B", "A"]) {
       result[who] = await session(db, who, async (as) => {
         let read = await as(`select ctid::text as c from ${q(table.name)}`);
         let readA = read.rows.filter((r) => aRows.has(r.c)).length;
@@ -188,4 +190,142 @@ export async function probeStorage(db) {
     results.push(result);
   }
   return { rls, buckets: results, policies };
+}
+
+// A security definer function skips row-level security, so what it lets a caller do
+// shows only when it's called. Each one a visitor or any signed-in user may run is
+// called as the visitor and as user B, with arguments that point at user A's rows,
+// and A's rows are compared before and after. Each call is rolled back.
+export async function probeFunctions(db, functions, tables, known) {
+  const real = tables.filter((t) => t.kind === "r" || t.kind === "p");
+  const owned = real.filter((t) => ownerPath(t, real));
+  const aRows = await rowsOfA(db, owned, known);
+  // What would give A away in a result: their email, and private-looking values of theirs.
+  const tells = new Set([USERS.A.email]);
+  for (const t of owned) {
+    for (const row of aRows[t.name]) for (const c of t.columns) if (SENSITIVE.test(c.name) && typeof row[c.name] === "string" && row[c.name].length >= 4) tells.add(row[c.name]);
+  }
+  const aJson = new Set(Object.values(aRows).flat().map((r) => JSON.stringify(r)));
+  // One query tells which tables a call touched at all; only those are read again.
+  // A call can only change the tables its function names, so only those are checked.
+  const prints = async (tables) => tables.length
+    ? (await db.query(`select ${tables.map((t) => `(select md5(coalesce(string_agg(x::text, ',' order by x::text), '')) from public.${q(t.name)} x) as ${q(t.name)}`).join(", ")}`).catch(() => ({ rows: [{}] }))).rows[0]
+    : {};
+  const before = await prints(owned);
+  const out = [];
+  for (const f of functions) {
+    if (!f.definer || f.returns === "trigger" || !(f.anon || f.authenticated)) continue;
+    if (/pg_sleep/i.test(f.body)) continue;
+    const args = argumentsFor(f, owned, aRows);
+    // The tables it names, which are all a call can change; none if it never writes.
+    const writes = /\b(insert\s+into|update\s|delete\s+from|perform|select\s+[\w.]+\s*\()/i.test(f.body);
+    // A function that runs another (perform) may change any table.
+    const named = !writes ? [] : /\bperform\b/i.test(f.body) ? owned : owned.filter((t) => new RegExp(`\\b${t.name.replace(/\W/g, "\\$&")}\\b`, "i").test(f.body));
+    if (!args) {
+      out.push({ name: f.name, args: f.args, untested: "it takes an argument type the probe can't fill" });
+      continue;
+    }
+    const calls = {};
+    for (const who of ["anon", "B"]) {
+      if (who === "anon" ? !f.anon : !f.authenticated) continue;
+      const { role, claims } = AS[who];
+      await db.exec(`begin;
+        select set_config('request.jwt.claims', ${literal(JSON.stringify(claims))}, true),
+          set_config('request.jwt.claim.sub', ${literal(claims.sub ?? "")}, true),
+          set_config('request.jwt.claim.role', ${literal(claims.role)}, true);
+        set local role ${role}`);
+      try {
+        const call = await db.query(`select * from public.${q(f.name)}(${args.map((a, i) => `$${i + 1}::${a.type}`).join(", ")})`, args.map((a) => a.value))
+          .then((res) => ({ ok: true, rows: res.rows }), (error) => ({ ok: false, error: error.message, rows: [] }));
+        // A failed call leaves the transaction aborted, and nothing it did survives.
+        if (call.ok) await db.exec("reset role");
+        let changed = [];
+        if (call.ok && named.length) {
+          const after = await prints(named);
+          const touched = named.filter((t) => after[t.name] !== before[t.name]);
+          changed = changes(touched, aRows, await rowsOfA(db, touched, known));
+        }
+        const text = JSON.stringify(call.rows);
+        const returned = call.rows.some((r) => aJson.has(JSON.stringify(r))) || [...tells].some((t) => text.includes(t));
+        calls[who] = { ok: call.ok, ...(call.ok ? {} : { error: call.error }), changed, returned };
+      } finally {
+        await db.exec("rollback");
+      }
+    }
+    // How the call was aimed at A, in words: only the arguments that point somewhere.
+    out.push({ name: f.name, args: f.args, called: [...new Set(args.map((a) => a.about).filter(Boolean))], calls });
+  }
+  return out;
+}
+
+// A's rows in each owned table, as the database's owner sees them.
+async function rowsOfA(db, owned, known) {
+  const out = {};
+  for (const t of owned) {
+    const rows = await db.query(`select * from ${q(t.name)}`).then((r) => r.rows, () => []);
+    out[t.name] = rows.filter((row) => ownerOf(t, row, known) === "A");
+  }
+  return out;
+}
+
+// Which tables' A rows a call deleted, added or changed, and which columns changed.
+function changes(owned, before, after) {
+  const out = [];
+  for (const t of owned) {
+    const was = before[t.name];
+    const now = after[t.name];
+    // Rows come back in any order after an update.
+    const all = (rows) => rows.map((r) => JSON.stringify(r)).sort().join("\n");
+    if (all(was) === all(now)) continue;
+    const how = now.length < was.length ? "deleted" : now.length > was.length ? "added" : "changed";
+    const key = (row) => JSON.stringify(t.pk.map((c) => row[c]));
+    const columns = new Set();
+    if (how === "changed" && t.pk.length) {
+      for (const row of was) {
+        const next = now.find((r) => key(r) === key(row));
+        if (next) for (const c of Object.keys(row)) if (JSON.stringify(row[c]) !== JSON.stringify(next[c])) columns.add(c);
+      }
+    }
+    out.push({ table: t.name, how, columns: [...columns] });
+  }
+  return out;
+}
+
+const USER_ARG = /^(user|uid|owner|profile|author|member|account|customer|player|creator|created_by|userid)(_?id)?$/;
+const NUMBER = /^(smallint|integer|bigint|numeric|real|double precision)$/;
+
+// Arguments that aim at A: A's id for a user, the id of A's row for a table's id,
+// A's email for an email. Null when an argument's type can't be filled.
+function argumentsFor(f, owned, aRows) {
+  const names = f.argModes.length ? f.argNames.filter((_, i) => ["i", "b", "v"].includes(f.argModes[i])) : f.argNames;
+  // The tables the body works on, in the order it names them: the likeliest target of a bare "id".
+  const word = (t) => t.name.replace(/\W/g, "\\$&");
+  const mentioned = owned.filter((t) => new RegExp(`\\b(from|update|into|join)\\s+(public\\.)?"?${word(t)}\\b`, "i").test(f.body))
+    .sort((a, b) => f.body.search(new RegExp(`\\b${word(a)}\\b`)) - f.body.search(new RegExp(`\\b${word(b)}\\b`)));
+  const rowId = (table, type) => {
+    const row = table && aRows[table.name][0];
+    const pk = table?.pk.length === 1 ? table.columns.find((c) => c.name === table.pk[0]) : null;
+    if (!row || !pk || row[pk.name] == null) return null;
+    const kind = pk.type === "uuid" ? "uuid" : NUMBER.test(pk.type) ? "number" : "text";
+    return (type === "uuid" ? kind === "uuid" : NUMBER.test(type) ? kind === "number" : true) ? { value: String(row[pk.name]), about: `the id of user A's row in ${table.name}` } : null;
+  };
+  const tableFor = (base) => owned.find((t) => [base, `${base}s`, `${base}es`, base.replace(/y$/, "ies")].includes(t.name));
+  const out = [];
+  for (const [i, type] of f.argTypes.entries()) {
+    const name = (names[i] ?? "").toLowerCase().replace(/^(p_|_|in_|arg_|target_|the_)/, "");
+    const idOf = name.endsWith("_id") || name.endsWith("id") && name !== "id" ? tableFor(name.replace(/_?id$/, "")) : null;
+    let pick;
+    if (type === "uuid" || NUMBER.test(type) || /^(text|character varying|citext)$/.test(type)) {
+      if (USER_ARG.test(name) && (type === "uuid" || !NUMBER.test(type))) pick = { value: USERS.A.id, about: "user A's id" };
+      else if (/email/.test(name) && !NUMBER.test(type)) pick = { value: USERS.A.email, about: "user A's email" };
+      // Text is an id only when it's named like one.
+      else pick = rowId(idOf, type) ?? (type === "uuid" || NUMBER.test(type) || /id$/.test(name) ? rowId(mentioned[0], type) : null)
+        ?? (type === "uuid" ? { value: USERS.A.id, about: "user A's id" } : NUMBER.test(type) ? { value: "1" } : { value: "rls-probe" });
+    } else if (type === "boolean") pick = { value: "true" };
+    else if (type === "jsonb" || type === "json") pick = { value: "{}" };
+    else if (/^(date|timestamp)/.test(type)) pick = { value: "2026-01-01" };
+    else return null;
+    out.push({ ...pick, type });
+  }
+  return out;
 }

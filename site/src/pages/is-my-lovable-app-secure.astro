@@ -1,4 +1,5 @@
 ---
+import Diagram from "../components/Diagram.astro";
 import Base from "../layouts/Base.astro";
 const base = import.meta.env.BASE_URL;
 ---
@@ -12,11 +13,13 @@ const base = import.meta.env.BASE_URL;
     <p class="lead">Apps built with Lovable or Bolt talk to Supabase straight from the browser, with a key every visitor gets. That key isn't what keeps your users' data private. The database's row-level security rules are, and when they're missing or too loose, anyone can read, and often change, other people's data.</p>
 
     <h2>How common it is</h2>
-    <p>In 2025 a scan of 1,645 Lovable apps found 170 that exposed their users' data this way (CVE-2025-48757). When we ran rls-probe on 25 open-source apps built with Lovable, Bolt or by hand, it flagged 19 of them with at least one critical or high problem.</p>
+    <p>In 2025 a scan of 1,645 Lovable apps found 170 that exposed their users' data this way (CVE-2025-48757). When we ran rls-probe on 25 open-source apps built with Lovable, Bolt or by hand, it flagged 18 of them with at least one critical or high problem.</p>
+
+    <Diagram name="reach" alt="Row-level security is on for orders, but its policies use (true) for select and update, so user B can see and change user A's order while a visitor is blocked." />
 
     <h2>The holes that come up most</h2>
     <ul>
-      <li><strong>Database functions anyone can call.</strong> A function marked <code>security definer</code> runs with full rights, skipping every rule. In 13 of the 25 apps, visitors or any signed-in user could call one.</li>
+      <li><strong>Database functions anyone can call.</strong> A function marked <code>security definer</code> runs with full rights, skipping every rule. In 15 of the 25 apps, visitors or any signed-in user could call one. In 5, rls-probe called one as a visitor who wasn't signed in, and it deleted or changed another user's data.</li>
       <li><strong>Rows created in someone else's name.</strong> An insert rule that doesn't check who's inserting lets one user post messages or notifications that look like another user's (10 apps).</li>
       <li><strong>Visitors who can change data.</strong> Rules that let anyone, signed in or not, add or edit rows (9 apps).</li>
       <li><strong>File storage open to everyone.</strong> Buckets where anyone can upload into, replace or delete other people's files (8 apps).</li>

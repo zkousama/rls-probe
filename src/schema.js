@@ -87,7 +87,8 @@ export async function readFunctions(db) {
       pg_get_functiondef(p.oid) as body,
       has_function_privilege('anon', p.oid, 'execute') as anon,
       has_function_privilege('authenticated', p.oid, 'execute') as authenticated,
-      t.typname as returns
+      t.typname as returns,
+      p.proargtypes::regtype[]::text[] as "argTypes", coalesce(p.proargnames, '{}') as "argNames", coalesce(p.proargmodes::text[], '{}') as "argModes"
     from pg_proc p join pg_namespace n on n.oid = p.pronamespace join pg_type t on t.oid = p.prorettype
     where n.nspname = 'public' and p.prokind = 'f'
     order by p.proname`)).rows;

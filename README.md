@@ -1,4 +1,4 @@
-# rls-probe
+# <img src="site/public/favicon.svg" width="34" height="34" alt=""> rls-probe
 
 [![ci](https://github.com/zkousama/rls-probe/actions/workflows/ci.yml/badge.svg)](https://github.com/zkousama/rls-probe/actions/workflows/ci.yml)
 
@@ -6,6 +6,11 @@ Finds what a visitor, or another signed-in user, can read and change in a
 Supabase app. It runs the app's migrations in an in-memory Postgres, signs in
 two users who each own some rows, and tries every table as a visitor and as the
 other user. Nothing touches a live database.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="site/public/diagrams/how-dark.png">
+  <img alt="Your migrations are rebuilt into Postgres in your browser; two test users move in, and user B and a visitor try to see, change, delete and add user A's rows; you get a grade from A to F and a tested fix for each problem." src="site/public/diagrams/how.png">
+</picture>
 
 ```sh
 npx rls-probe path/to/your-app
@@ -20,16 +25,17 @@ files, or one `.sql` file) and, when it's pointed at the app itself, scans the
 code too. The report starts in plain words:
 
 ```
-rls-probe: 6 problems to fix (5 tables checked).
+rls-probe: grade F. 6 problems to fix (5 tables checked).
 
   CRITICAL  Anyone on the internet can see, change, delete and add every row in the orders table.
+  CRITICAL  Anyone on the internet can call the database function delete_order() to delete other users' orders: rls-probe tried it, and the test user's row in orders was deleted.
   CRITICAL  Your secret Supabase key (the service role key) is in your app's code at src/supabase.ts:3, so anyone can copy it and skip every rule.
   HIGH      Any signed-in user can change other users' messages.
   HIGH      Anyone on the internet can see your users' profiles, including email.
-  HIGH      The database function delete_order() runs with full rights, and anyone on the internet can call it to change data.
   HIGH      The edge function admin-export can be run by anyone on the internet.
 
 Worth a look, and fine if it's on purpose:
+  - Any signed-in user can see other users' messages.
   - The order_totals view shows its rows to anyone, skipping the rules on the tables underneath.
   - Files in the "invoices" storage bucket can be downloaded by anyone who has the link.
 ```
@@ -54,16 +60,48 @@ npx rls-probe path/to/your-app --prompt
 ```
 
 prints a request to paste into your AI builder. It names your own policies and
-owner columns, so the builder changes the right thing:
+owner columns, so the builder changes the right thing, and adds SQL that already
+passed a test:
 
 ```
-3. Any signed-in user can change other users' messages.
+4. Any signed-in user can change other users' messages.
    Change the policy "auth write" (using true) on "messages" so a user can only
    change rows where sender_id points to a profiles row whose id = auth.uid().
    Use that condition in both "using" and "with check".
+
+   rls-probe tested this SQL on a copy of the database. It closes the problem, and
+   afterwards each signed-in user can change only their own rows in messages.
+
+   create policy "rls-probe: own messages only (update)" on public."messages" as restrictive
+     for update to authenticated
+     using ("sender_id" = (select auth.uid()))
+     with check ("sender_id" = (select auth.uid()));
 ```
 
 Run rls-probe again afterwards to check the fix.
+
+### Fixes that are tested before you see them
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="site/public/diagrams/fixes-dark.png">
+  <img alt="Each fix is applied to a copy of the database and probed again; it's offered only if the problem is gone, nothing new opened and every owner keeps their rows, otherwise it's held back." src="site/public/diagrams/fixes.png">
+</picture>
+
+Each fix is applied to a copy of your database, which is then probed again. It's
+offered only if its problem is gone, nothing new opened anywhere, and the owner of
+every row (and their teammates, when the app has teams) can still do what they could
+before. Each one says what changes afterwards, such as "each signed-in user sees only
+their own rows in posts", so you can tell when it limits a feature.
+
+```sh
+npx rls-probe path/to/your-app --fix-policies
+```
+
+writes the fixes that passed as a new migration next to the others. Fixes for things
+that may be on purpose are written commented out, and problems in the code (a leaked
+key, an open edge function) are listed rather than fixed. A fix never rewrites your
+policies: it revokes a grant or adds a restrictive policy, which narrows what the
+existing ones allow. Run rls-probe again after applying it.
 
 ## In Claude Code, Cursor and other AI agents
 
@@ -82,27 +120,30 @@ In Cursor, Windsurf, Claude Desktop or any other MCP client, add the server:
 ```json
 {
   "mcpServers": {
-    "rls-probe": { "command": "npx", "args": ["-y", "rls-probe@0.6.0", "mcp"] }
+    "rls-probe": { "command": "npx", "args": ["-y", "rls-probe@0.7.0", "mcp"] }
   }
 }
 ```
 
-It has two tools: `check_supabase_security` (the report, in plain words, with what
-to change) and `write_supabase_grants_migration` (the `--fix` migration).
+It has three tools: `check_supabase_security` (the report, in plain words, with what
+to change and the tested SQL), `write_supabase_security_fixes` (the `--fix-policies`
+migration) and `write_supabase_grants_migration` (the `--fix` migration).
 
 ## Output
 
 | Flag | Prints |
 |---|---|
 | (none) | The plain summary, then the details |
-| `--prompt` | The request for an AI builder |
+| `--prompt` | The request for an AI builder, with the tested SQL |
 | `--markdown` | A Markdown report, for pull requests and AI agents |
 | `--sarif` | SARIF, for GitHub code scanning |
 | `--json` | Everything, for scripts |
 | `--badge` | A README badge with the grade, linking to the web page |
 
 `--markdown-file=<path>` and `--sarif-file=<path>` write those formats as well,
-in the same run.
+in the same run. `--test-fixes` adds the tested fixes to any format (`--prompt` and
+`--fix-policies` always test them); it takes one more probe of the database, or a few
+when a fix has to be tried on its own.
 
 If some tables were made in the Supabase dashboard rather than in migrations,
 check the live schema instead: `supabase db dump -f schema.sql`, then
@@ -123,6 +164,11 @@ that problem (CVE-2025-48757).
 Reading policies by eye is slow and easy to get wrong: a policy can look right
 and still let one user edit another's rows. So this doesn't read them. It tries.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="site/public/diagrams/reach-dark.png">
+  <img alt="Row-level security is on for orders, but its policies use (true) for select and update, so user B can see and change user A's order while a visitor is blocked." src="site/public/diagrams/reach.png">
+</picture>
+
 ## What it checks
 
 - **Every table in `public`**, as a visitor with the public key and as a second
@@ -132,8 +178,16 @@ and still let one user edit another's rows. So this doesn't read them. It tries.
   and being readable by everyone is often what they're for.
 - **Views**, which run with their owner's rights and skip the rules on the
   tables underneath unless they're `security_invoker`.
-- **`security definer` functions** that visitors or any user can call, and that
-  never check `auth.uid()`.
+- **`security definer` functions** that visitors or any user can call. Each one is
+  called as a visitor and as the second user, with arguments aimed at the first
+  user's rows (their id, the id of their order), and what it did is compared:
+  "rls-probe tried it, and the test user's row in orders was deleted". A function
+  that only bumps a counter, or that checks `auth.uid()` and changes nothing, is
+  marked as worth a look rather than as a problem.
+- **Teammates**, when the app has groups (organization, team or workspace members):
+  a third user joins the first user's group with the plainest role, and what they
+  can see and change is shown, not graded, since sharing with teammates is usually
+  the point. Fixes keep it working.
 - **Storage**: every bucket the migrations create, and any a storage policy
   names (often made in the dashboard). Each user gets a file in their own folder,
   and a visitor and the other user try to see, replace, delete and upload into
@@ -153,6 +207,11 @@ their grants. A table without one answers `permission denied` (42501).
 The tempting fix for that error is a grant on every table. On a table with
 row-level security off, or with a policy that's too loose, that grant is
 what exposes the data.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="site/public/diagrams/trap-dark.png">
+  <img alt="A new table answers permission denied (42501). Granting everything to everyone opens it to every visitor when its row-level security is loose; granting only what's safe keeps the app working with nothing leaking." src="site/public/diagrams/trap.png">
+</picture>
 
 ```sh
 npx rls-probe path/to/your-app --oct30
@@ -260,7 +319,11 @@ migrations were kept, are listed at the top of the report, since they can't be
 checked.
 
 On 25 open-source apps built with Lovable, Bolt or by hand (7 to 671 migration
-files each), every run finishes, most in 2 to 4 seconds.
+files each), every run finishes, most in 2 to 4 seconds. Testing the fixes as well
+(`--test-fixes`, `--prompt`, `--fix-policies`) takes 4 to 36 seconds, 8 for the median
+app, and stops after three minutes on the largest (402 tables), leaving the fixes it
+didn't get to marked untested. Of the 353 fixes proposed for the other 24 apps, 351
+passed.
 
 ## Limits
 
@@ -268,8 +331,16 @@ files each), every run finishes, most in 2 to 4 seconds.
   doesn't create, such as an `is_published` flag, may look stricter here than
   it is with real data.
 - The other user is a stranger: no row in role or permission tables, and their
-  own organization or team rather than A's. What a teammate in the same
-  organization can do isn't tested.
+  own organization or team rather than A's. The teammate is found through a
+  membership table named like `org_members`, `team_members` or `workspace_users`;
+  an app that keeps members another way gets no teammate, and its fixes aren't
+  checked against one.
+- Functions are called once per caller, with arguments guessed from their names
+  (`order_id` gets the id of the first user's order). A function that needs other
+  arguments to do harm can look safer here than it is; the report says when a call
+  changed nothing.
+- A tested fix is tested against these users and these rows. Its "afterwards" line
+  says what it takes away; read it before applying the fix.
 - When a trigger fails while seeding, the row goes in without its triggers and
   the report says so. A create the probe couldn't test (a unique key, a
   trigger) is listed rather than counted as refused.

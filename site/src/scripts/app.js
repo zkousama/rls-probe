@@ -3,15 +3,16 @@
 import { badge, explain, fixPrompt } from "../../../src/explain.js";
 import { renderGrants } from "../../../src/grants.js";
 import { chooseFiles } from "../../../src/project.js";
-import { renderText } from "../../../src/report.js";
+import { memberCan, renderText } from "../../../src/report.js";
 import { SKIP_DIRS } from "../../../src/static.js";
+import { version as VERSION } from "../../../package.json";
 
 const $ = (id) => document.getElementById(id);
 const BASE = import.meta.env.BASE_URL;
 const MAX_CODE_FILES = 800;
 const MAX_FILE_BYTES = 2_000_000;
 const SAMPLE = "https://github.com/zkousama/rls-probe/tree/main/test/fixtures/leaky";
-const HIRE = "https://www.upwork.com/freelancers/~012952805fd983991e";
+const HIRE = "https://byousama.pages.dev/#contact";
 
 // A problem with what was given, said to the person, as opposed to a bug.
 class Problem extends Error {}
@@ -20,7 +21,7 @@ class Problem extends Error {}
 // starts, so reading the page costs nothing.
 let warm;
 function warmUp() {
-  warm ??= Promise.all([fetch(`${BASE}base.tar.gz`).then((r) => r.blob()), import("../../../src/engine.js")]);
+  warm ??= Promise.all([fetch(`${BASE}base.tar.gz`).then((r) => r.blob()), import("../../../src/engine.js"), import("../../../src/fixes.js")]);
   return warm;
 }
 for (const event of ["pointerdown", "focusin", "dragenter"]) document.addEventListener(event, warmUp, { once: true });
@@ -45,6 +46,8 @@ function select(tab) {
 }
 
 let again = null;
+// The inspection on screen: fixes tested for an earlier one are dropped.
+let current = 0;
 $("pane-github").addEventListener("submit", (e) => {
   e.preventDefault();
   const url = $("repo").value;
@@ -220,7 +223,7 @@ const STEPS = [
 
 async function inspect(source) {
   again = () => inspect(source);
-  for (const b of document.querySelectorAll("button")) b.disabled = true;
+  for (const b of document.querySelectorAll("main button")) b.disabled = true;
   $("error").hidden = true;
   $("result").hidden = true;
   showSteps("read");
@@ -228,31 +231,94 @@ async function inspect(source) {
   try {
     const project = await source();
     showSteps("start");
-    const [snapshot, { runProbe }] = await warmUp();
-    const report = await runProbe({ ...project, oct30: true, snapshot, onProgress: showSteps });
-    $("progress").hidden = true;
-    show(report, project);
+    const [snapshot, { runProbe }, fixes] = await warmUp();
+    // keep: the migrated database is saved, so each fix is tried without running the migrations again.
+    const report = await runProbe({ ...project, oct30: true, snapshot, onProgress: showSteps, keep: true });
+    hideSteps();
+    // Until the fixes are tested, none is offered.
+    const proposed = fixes.proposeFixes(report);
+    report.fixes = [];
+    const view = show(report, project, new Set(proposed.map((f) => `${f.kind} ${f.where}`)));
+    if (proposed.length) testFixes(report, project, snapshot, fixes, view, ++current);
   } catch (error) {
-    $("progress").hidden = true;
+    hideSteps();
     $("error").textContent = error instanceof Problem ? error.message : `The inspection stopped: ${error.message}. If this keeps happening, open an issue on GitHub with the link you used.`;
     $("error").hidden = false;
     if (!(error instanceof Problem)) console.error(error);
   } finally {
-    for (const b of document.querySelectorAll("button")) b.disabled = false;
+    for (const b of document.querySelectorAll("main button")) b.disabled = false;
   }
 }
 
+// The steps fill in as they finish: a spinner on the one running, a stamped tick and
+// its time on each one done, a bar for the whole, and a clock.
+let steps = null;
 function showSteps(now) {
   const at = STEPS.findIndex(([key]) => key === now);
-  $("progress").querySelector(".steps").replaceChildren(...STEPS.map(([, text], i) => el("li", { className: i < at ? "done" : i === at ? "now" : "" }, text)));
-  $("progress-sub").textContent = STEPS[at]?.[2] ?? "";
+  const time = performance.now();
+  if (now === "read" || !steps) {
+    clearInterval(steps?.ticker);
+    steps = {
+      started: time,
+      since: time,
+      at: 0,
+      items: STEPS.map(([, text]) => {
+        const clock = el("span", { className: "time" });
+        return { li: el("li", {}, el("span", { className: "dot" }), el("span", {}, text), clock), clock };
+      }),
+      ticker: setInterval(tick, 100),
+    };
+    $("progress").querySelector(".steps").replaceChildren(...steps.items.map((s) => s.li));
+  }
+  for (let i = steps.at; i < at; i++) {
+    steps.items[i].li.className = "done";
+    steps.items[i].clock.textContent = seconds(i === steps.at ? time - steps.since : 0);
+  }
+  if (at > steps.at) Object.assign(steps, { at, since: time });
+  steps.items[at].li.className = "now";
+  $("progress-fill").style.width = `${((at + 0.5) / STEPS.length) * 100}%`;
+  $("progress-sub").textContent = STEPS[at][2];
   $("progress").hidden = false;
+  tick();
+}
+
+function tick() {
+  const time = performance.now();
+  $("progress-clock").textContent = seconds(time - steps.started);
+  steps.items[steps.at].clock.textContent = seconds(time - steps.since);
+}
+
+function hideSteps() {
+  clearInterval(steps?.ticker);
+  steps = null;
+  $("progress").hidden = true;
+}
+
+function seconds(ms) {
+  return `${(ms / 1000).toFixed(1)} s`;
+}
+
+// Each fix is applied to a copy of the database and probed again, after the result is
+// on screen. Those that close their problem without the owner losing anything appear
+// under the problem, and in the fix for the AI builder.
+async function testFixes(report, project, snapshot, fixes, view, run) {
+  try {
+    // A minute at most: fixes not tried by then are left out and said to be.
+    const tested = await fixes.verifyFixes({ migrations: project.migrations, report, snapshot, deadline: performance.now() + 60_000 });
+    if (run !== current) return;
+    report.fixes = tested;
+    view.update(fixes.fixesMigration(report, VERSION));
+  } catch (error) {
+    if (run !== current) return;
+    console.error(error);
+    view.failed(error);
+  }
 }
 
 // ---------- The inspection slip ----------
 const SEVERITY = { critical: "Critical", high: "High", medium: "Medium", review: "Worth checking" };
 
-function show(report, project) {
+function show(report, project, testing) {
   const e = explain(report);
   const tables = report.results.length;
   const count = (severity) => e.problems.filter((p) => p.severity === severity).length;
@@ -264,7 +330,7 @@ function show(report, project) {
   const tally = [...["critical", "high", "medium"].filter(count).map((s) => `${count(s)} ${SEVERITY[s].toLowerCase()}`), ...(e.notes.length ? [`${e.notes.length} worth checking`] : [])];
 
   const actions = el("div", { className: "mt-5 flex flex-wrap gap-3" });
-  if (fixable) actions.append(copyButton("Copy the fix for your AI builder", fixPrompt(report), "btn btn-ink"));
+  if (fixable) actions.append(copyButton("Copy the fix for your AI builder", () => fixPrompt(report), "btn btn-ink"));
   const rerun = el("button", { type: "button", className: "btn btn-line" }, "Inspect again");
   rerun.addEventListener("click", () => again?.());
   actions.append(rerun);
@@ -282,20 +348,31 @@ function show(report, project) {
       actions,
       ...(fixable ? [
         el("p", { className: "mt-3 text-[0.95rem] text-muted" }, "Paste the fix into Lovable, Bolt, Cursor or Claude. When your app is updated, inspect it again."),
-        el("p", { className: "mt-1 text-[0.95rem] text-muted" }, "Rather have a person fix it? ", el("a", { href: HIRE, className: "font-semibold text-ink underline decoration-2 underline-offset-4" }, "Hire the developer who built rls-probe"), "."),
+        el("p", { className: "mt-1 text-[0.95rem] text-muted" }, "Rather have a person fix it? ", el("a", { href: HIRE, className: "font-semibold text-ink underline decoration-2 underline-offset-4" }, "Hire me"), ", I built rls-probe."),
       ] : []),
     ),
   );
 
+  // Where each problem's tested fix goes, once there is one.
+  const slots = new Map();
+  const slot = (item) => {
+    const key = `${item.kind} ${item.where}`;
+    const node = el("div", {}, ...(testing.has(key) ? [el("p", { className: "mt-3 text-[0.92rem] text-muted" }, "Testing a fix on a copy of your database…")] : yourself(item)));
+    slots.set(key, node);
+    return node;
+  };
+  const status = el("p", { className: "mb-2 text-[0.95rem] text-muted", ariaLive: "polite" }, ...(testing.size ? [el("span", { className: "spinner" }), "Testing a fix for each problem on a copy of your database…"] : []));
+  const all = el("div", {});
+
   const sections = [];
   if (e.problems.length) {
-    sections.push(section("Problems", null, el("div", {}, ...e.problems.map((p) => el("div", { className: "finding" },
+    sections.push(section("Problems", null, status, el("div", {}, ...e.problems.map((p) => el("div", { className: "finding" },
       el("span", { className: `sev sev-${p.severity}` }, SEVERITY[p.severity]),
       el("div", {},
         el("p", { className: "font-semibold" }, p.headline),
-        el("details", { className: "mt-1.5" }, el("summary", {}, "What to change"), el("p", { className: "ask" }, p.ask), ...yourself(p)),
+        el("details", { className: "mt-1.5" }, el("summary", {}, "What to change"), el("p", { className: "ask" }, p.ask), slot(p)),
       ),
-    )))));
+    ))), all));
   }
   if (report.results.length) sections.push(checklist(report));
   if (e.grade === "A" || e.grade === "B") {
@@ -311,9 +388,10 @@ function show(report, project) {
   if (e.notes.length) {
     sections.push(section("Worth checking", "Fine if they're on purpose.", el("div", {}, ...e.notes.map((n) => el("div", { className: "finding" },
       el("span", { className: "sev sev-review" }, "Check"),
-      el("div", {}, el("p", {}, n.headline), el("details", { className: "mt-1.5" }, el("summary", {}, "If it isn't on purpose"), el("p", { className: "ask" }, n.ask), ...yourself(n))),
+      el("div", {}, el("p", {}, n.headline), el("details", { className: "mt-1.5" }, el("summary", {}, "If it isn't on purpose"), el("p", { className: "ask" }, n.ask), slot(n))),
     )))));
   }
+  if (e.team) sections.push(section("Shared with teammates", null, el("p", {}, capitalize(e.team.headline.replace(/^Teammates: /, "")))));
   if (e.missing.length) {
     const named = e.missing.length > 1 ? `${e.missing.slice(0, -1).join(", ")} and ${e.missing.at(-1)}` : e.missing[0];
     sections.push(section("Not inspected", null, el("p", {}, `Your migrations use ${named} but never create ${e.missing.length === 1 ? "it" : "them"}, so ${e.missing.length === 1 ? "it wasn't" : "they weren't"} inspected. Were ${e.missing.length === 1 ? "it" : "they"} made in the Supabase dashboard?`)));
@@ -326,44 +404,77 @@ function show(report, project) {
   $("result").replaceChildren(el("div", { className: "slip mt-4" }, head, ...sections));
   $("result").hidden = false;
   $("result").scrollIntoView({ behavior: "smooth", block: "start" });
+
+  return {
+    // The tests are done: each problem gets its tested fix, or keeps only the request.
+    update(migration) {
+      const now = explain(report);
+      for (const item of [...now.problems, ...now.notes]) slots.get(`${item.kind} ${item.where}`)?.replaceChildren(...yourself(item));
+      const passed = now.problems.filter((p) => p.selfFix?.tested).length;
+      const database = now.problems.filter((p) => testing.has(`${p.kind} ${p.where}`)).length;
+      const late = report.fixes.some((f) => f.untested);
+      status.textContent = !database ? "" : passed === database
+        ? `Each problem in the database has a fix that passed its test on a copy of your database. Open "What to change" to see it.`
+        : `${passed} of the ${database} problems in the database have a fix that passed its test on a copy of your database. ${late ? "Testing the others took too long, so only the requests are shown for them." : "The others need a closer look."}`;
+      if (passed) {
+        all.replaceChildren(el("details", { className: "mt-4" },
+          el("summary", { className: "cursor-pointer font-semibold text-ink" }, "All the tested fixes, as one migration"),
+          el("pre", { className: "codebox" }, migration),
+          copyButton("Copy the migration", migration, "btn btn-line h-9 px-3 text-[0.9rem]"),
+        ));
+      }
+    },
+    failed(error) {
+      for (const node of slots.values()) if (node.textContent.startsWith("Testing")) node.replaceChildren();
+      status.textContent = `The fixes couldn't be tested (${error.message}), so only the requests are shown.`;
+    },
+  };
 }
 
 // Every table, and what a visitor and a second signed-in user managed to do to the
 // first user's rows. Tables with the most reached cells come first.
 function checklist(report) {
   const ACTIONS = [["read", "see"], ["update", "change"], ["delete", "delete"], ["insert", "add"]];
+  // A teammate's column group appears when the app has groups; what they reach is shared, not leaked.
+  const WHO = report.results.some((r) => r.D) ? ["anon", "B", "D"] : ["anon", "B"];
+  const NAME = { anon: "A visitor", B: "Another signed-in user", D: "A teammate" };
   const state = (r, who, action) => {
-    const reached = action === "read" ? r[who].read > 0 : r[who][action];
+    const reached = r[who] && (action === "read" ? r[who].read > 0 : r[who][action]);
     if (!reached) return "blocked";
-    return r.owned || action !== "read" ? "reached" : "public";
+    // What a teammate can do only as a member is sharing; what anyone can do, or adding
+    // a row in another member's name, is marked as it is for user B.
+    if (who === "D" && !memberCan(r, action)) return r.owned || action !== "read" ? "reached" : "public";
+    return who === "D" ? "team" : r.owned || action !== "read" ? "reached" : "public";
   };
-  const MARK = { reached: "✗", public: "○", blocked: "✓" };
-  const WORD = { reached: "reached", public: "readable, shared table", blocked: "blocked" };
+  const MARK = { reached: "✗", public: "○", team: "○", blocked: "✓" };
+  const WORD = { reached: "reached", public: "readable, shared table", team: "shared with members of the same group", blocked: "blocked" };
   const probed = report.results.filter((r) => r.anon);
-  const reached = (r) => ["anon", "B"].flatMap((who) => ACTIONS.map(([a]) => state(r, who, a))).filter((s) => s === "reached").length;
+  const reached = (r) => WHO.flatMap((who) => ACTIONS.map(([a]) => state(r, who, a))).filter((s) => s === "reached").length;
   const rows = [...probed].sort((a, b) => reached(b) - reached(a) || a.table.localeCompare(b.table));
   const mark = (r, who, a, label, first) => {
     const s = state(r, who, a);
-    return el("td", { className: first ? "gap" : "" }, el("span", { className: `mark mark-${s}`, title: `${who === "anon" ? "A visitor" : "Another user"}, ${label}: ${WORD[s]}`, ariaLabel: `${label}: ${WORD[s]}` }, MARK[s]));
+    return el("td", { className: first ? "gap" : "" }, el("span", { className: `mark mark-${s === "team" ? "public" : s}`, title: `${NAME[who]}, ${label}: ${WORD[s]}`, ariaLabel: `${label}: ${WORD[s]}` }, MARK[s]));
   };
-  const table = el("table", { className: "checklist" },
+  const table = el("table", { className: `checklist${WHO.length > 2 ? " wide" : ""}` },
     el("thead", {},
-      el("tr", {}, el("th", {}), el("th", { colSpan: 4, className: "who gap" }, "A visitor"), el("th", { colSpan: 4, className: "who gap" }, "Another signed-in user")),
-      el("tr", {}, el("th", {}), ...["anon", "B"].flatMap(() => ACTIONS.map(([, label], i) => el("th", { className: i === 0 ? "gap" : "" }, label)))),
+      el("tr", {}, el("th", {}), ...WHO.map((who) => el("th", { colSpan: 4, className: "who gap" }, NAME[who]))),
+      el("tr", {}, el("th", {}), ...WHO.flatMap(() => ACTIONS.map(([, label], i) => el("th", { className: i === 0 ? "gap" : "" }, label)))),
     ),
     el("tbody", {},
       ...rows.map((r) => el("tr", {},
         el("td", { className: "table-name" }, r.table, ...(r.rls ? [] : [el("span", { className: "flag" }, "RLS off")]), ...(r.owned ? [] : [el("span", { className: "flag shared" }, "shared")])),
-        ...["anon", "B"].flatMap((who) => ACTIONS.map(([a, label], i) => mark(r, who, a, label, i === 0))),
+        ...WHO.flatMap((who) => ACTIONS.map(([a, label], i) => mark(r, who, a, label, i === 0))),
       )),
-      ...report.results.filter((r) => !r.anon).map((r) => el("tr", {}, el("td", { className: "table-name" }, r.table), el("td", { colSpan: 8, className: "gap text-left text-[0.88rem] text-muted" }, `Not tested: ${r.skipped}`))),
+      ...report.results.filter((r) => !r.anon).map((r) => el("tr", {}, el("td", { className: "table-name" }, r.table), el("td", { colSpan: WHO.length * 4, className: "gap text-left text-[0.88rem] text-muted" }, `Not tested: ${r.skipped}`))),
       // Files in storage, same marks: reading a public bucket is what public means.
       ...(report.storage?.buckets ?? []).filter((b) => !b.skipped).map((b) => el("tr", {},
         el("td", { className: "table-name" }, `files in ${b.bucket}`, el("span", { className: "flag shared" }, b.public ? "public bucket" : "private bucket")),
-        ...["anon", "B"].flatMap((who) => ACTIONS.map(([a, label], i) => {
-          const done = b[who][a];
+        ...WHO.flatMap((who) => ACTIONS.map(([a, label], i) => {
+          const done = b[who]?.[a];
           const s = !done ? "blocked" : a === "read" && b.public ? "public" : "reached";
-          return el("td", { className: i === 0 ? "gap" : "" }, el("span", { className: `mark mark-${s}`, title: `${who === "anon" ? "A visitor" : "Another user"}, ${label}: ${WORD[s]}`, ariaLabel: `${label}: ${WORD[s]}` }, MARK[s]));
+          // Files aren't tried as the teammate.
+          if (who === "D") return el("td", { className: i === 0 ? "gap" : "" });
+          return el("td", { className: i === 0 ? "gap" : "" }, el("span", { className: `mark mark-${s}`, title: `${NAME[who]}, ${label}: ${WORD[s]}`, ariaLabel: `${label}: ${WORD[s]}` }, MARK[s]));
         })),
       )),
     ),
@@ -372,7 +483,7 @@ function checklist(report) {
     el("div", { className: "-mx-1 overflow-x-auto px-1" }, table),
     el("p", { className: "mt-4 flex flex-wrap gap-x-6 gap-y-1 text-[0.9rem] text-muted" },
       el("span", {}, el("span", { className: "mark mark-reached" }, "✗"), "reached another user's data"),
-      el("span", {}, el("span", { className: "mark mark-public" }, "○"), "readable, in a table everyone shares"),
+      el("span", {}, el("span", { className: "mark mark-public" }, "○"), WHO.length > 2 ? "readable in a table everyone shares, or shared with a teammate" : "readable, in a table everyone shares"),
       el("span", {}, el("span", { className: "mark mark-blocked" }, "✓"), "blocked"),
     ),
   );
@@ -386,9 +497,11 @@ function yourself(item) {
   return [
     el("p", { className: "mt-3 text-[0.92rem] text-muted" }, `Or, if you manage your own Supabase project, ${where}:`),
     el("pre", { className: "codebox" }, item.selfFix.code),
+    ...(item.selfFix.tested ? [el("p", { className: "tested" }, `Tested on a copy of your database: it closes this problem, and afterwards ${item.selfFix.effect}`)] : []),
     copyButton("Copy", item.selfFix.code, "btn btn-line h-9 px-3 text-[0.9rem]"),
   ];
 }
+
 
 function section(title, lead, ...body) {
   return el("section", { className: "slip-section" },
@@ -398,13 +511,15 @@ function section(title, lead, ...body) {
   );
 }
 
+// text: the text, or a function that gives it when the button is pressed.
 function copyButton(label, text, className) {
   const button = el("button", { type: "button", className }, label);
   button.addEventListener("click", async () => {
+    const value = typeof text === "function" ? text() : text;
     try {
-      await navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(value);
     } catch {
-      const area = el("textarea", {}, text);
+      const area = el("textarea", {}, value);
       document.body.append(area);
       area.select();
       document.execCommand("copy");

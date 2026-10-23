@@ -1,7 +1,7 @@
 ---
 name: supabase-security
 description: Check a Supabase app's database security with rls-probe and fix what it finds. Use after creating or changing anything in supabase/migrations, before deploying, when asked whether a Supabase, Lovable or Bolt app is secure, or when the app gets "permission denied" (42501) after Supabase's October 2026 grants change.
-allowed-tools: Bash(npx -y rls-probe@0.6.0 *)
+allowed-tools: Bash(npx -y rls-probe@0.7.0 *)
 ---
 
 # Checking a Supabase app with rls-probe
@@ -16,7 +16,7 @@ functions.
 Use the `check_supabase_security` tool from this plugin's MCP server. Without it, run:
 
 ```sh
-npx -y rls-probe@0.6.0 <app folder> --oct30
+npx -y rls-probe@0.7.0 <app folder> --oct30
 ```
 
 The app folder is the one holding `supabase/migrations` (usually the project root).
@@ -25,8 +25,13 @@ to check (no migrations, or no tables in them).
 
 ## Fix
 
-- Get the exact changes with `npx -y rls-probe@0.6.0 <app folder> --prompt`. It names
-  the app's own policies and owner columns.
+- Get the exact changes with `npx -y rls-probe@0.7.0 <app folder> --prompt`. It names
+  the app's own policies and owner columns, and gives SQL that rls-probe already
+  tested on a copy of the database: prefer it. The `write_supabase_security_fixes`
+  tool, or `--fix-policies`, writes all the tested fixes as one migration.
+- Each tested fix says what changes afterwards ("each signed-in user sees only their
+  own rows in posts"). When that would limit a feature the app has, such as a public
+  feed, tell the user and ask before applying it.
 - Put every change in a **new** migration file in `supabase/migrations`. Never edit a
   migration that has already run.
 - Keep every user able to see, change and delete their own rows. Never weaken or drop

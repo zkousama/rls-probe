@@ -23,9 +23,16 @@ const TOOLS = [
   {
     name: "check_supabase_security",
     title: "Check a Supabase app's security",
-    description: "Runs the app's Supabase migrations in an in-memory Postgres (nothing touches a live database), signs in two users and tries every table as a visitor and as the other user. Also checks the code for leaked keys and open edge functions, and what Supabase's October 30, 2026 grants change breaks. Returns the problems in plain words, what to change, and the details. Run it after any change to supabase/migrations, and again after fixing, until no problems are left.",
+    description: "Runs the app's Supabase migrations in an in-memory Postgres (nothing touches a live database), signs in two users and tries every table as a visitor and as the other user. Also checks the code for leaked keys and open edge functions, and what Supabase's October 30, 2026 grants change breaks. Returns the problems in plain words, what to change with SQL that was tested on a copy of the database, and the details. Run it after any change to supabase/migrations, and again after fixing, until no problems are left.",
     inputSchema: { type: "object", properties: { path: PATH }, additionalProperties: false },
     annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: "write_supabase_security_fixes",
+    title: "Write the tested security fixes as a migration",
+    description: "Writes a new migration next to the others with a fix for each database problem check_supabase_security finds, but only fixes that passed a test: each was applied to a copy of the database and probed again, closing its problem without the owner of any row losing access or anything new opening. Fixes for things that may be on purpose are written commented out. Problems in the code (leaked keys, open edge functions) are listed, not fixed. Read the file before applying it.",
+    inputSchema: { type: "object", properties: { path: PATH }, additionalProperties: false },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   {
     name: "write_supabase_grants_migration",
@@ -36,7 +43,7 @@ const TOOLS = [
   },
 ];
 
-const INSTRUCTIONS = "Use check_supabase_security after creating or changing anything in supabase/migrations, before deploying, and whenever the user asks whether their Supabase app is secure. Fix problems in new migration files, never by weakening a policy, and check again until none are left. Items under 'worth a look' may be on purpose: ask the user before making them private.";
+const INSTRUCTIONS = "Use check_supabase_security after creating or changing anything in supabase/migrations, before deploying, and whenever the user asks whether their Supabase app is secure. Fix problems in new migration files, never by weakening a policy, preferring the tested SQL the check returns (or write_supabase_security_fixes), and check again until none are left. Each tested fix says what changes afterwards: tell the user when that limits a feature, such as a feed showing only the user's own posts. Items under 'worth a look' may be on purpose: ask the user before making them private.";
 
 export function serve() {
   const rl = readline.createInterface({ input: process.stdin });
@@ -55,7 +62,8 @@ export function serve() {
       send({ jsonrpc: "2.0", id: message.id, error: { code: error.code ?? -32603, message: error.message } });
     }
   });
-  rl.on("close", () => process.exit(0));
+  // Replies still on their way out go first.
+  rl.on("close", () => process.stdout.write("", () => process.exit(0)));
 }
 
 function send(message) {
@@ -84,7 +92,7 @@ async function handle({ method, params }) {
 
 async function call(name, { path: target = "." }) {
   if (name === "check_supabase_security") {
-    const run = await probe(target, ["--oct30", "--json"]);
+    const run = await probe(target, ["--oct30", "--test-fixes", "--json"]);
     if (!run.report) return failed(run);
     const r = run.report;
     const e = explain(r);
@@ -93,6 +101,7 @@ async function call(name, { path: target = "." }) {
       "",
       ...[...e.problems, ...e.notes].map((p) => `- ${p.severity.toUpperCase()}: ${p.headline}`),
       e.grants ? `\n${e.grants.headline}` : "",
+      e.team ? `\n${e.team.headline}` : "",
       e.missing.length ? `\nNot checked (never created by the migrations): ${e.missing.join(", ")}` : "",
       "",
       "## What to change",
@@ -104,6 +113,16 @@ async function call(name, { path: target = "." }) {
       renderText(r) + (r.grantsChange ? renderGrants(r.grantsChange) : ""),
     ].join("\n");
     return { content: [{ type: "text", text }], structuredContent: { grade: e.grade, verdict: e.verdict, exitCode: run.code, problems: e.problems, notes: e.notes }, isError: false };
+  }
+  if (name === "write_supabase_security_fixes") {
+    const run = await probe(target, ["--fix-policies", "--json"]);
+    if (!run.report) return failed(run);
+    const file = run.report.policyFixWritten;
+    const problems = run.report.findings.filter((f) => f.severity !== "review").length;
+    const text = file
+      ? [`Wrote ${file}. Read it before applying it, then run check_supabase_security again.`, "", fs.readFileSync(file, "utf8")].join("\n")
+      : problems ? "No fix passed its test, so no migration was written. Run check_supabase_security for what to change." : "Nothing to fix, so no migration was written.";
+    return { content: [{ type: "text", text }], isError: false };
   }
   if (name === "write_supabase_grants_migration") {
     const run = await probe(target, ["--fix", "--json"]);

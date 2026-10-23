@@ -11,6 +11,7 @@ const { title, description } = Astro.props;
 const base = import.meta.env.BASE_URL;
 const repo = "https://github.com/zkousama/rls-probe";
 const canonical = new URL(Astro.url.pathname, Astro.site).href;
+const hire = "https://byousama.pages.dev/#contact";
 ---
 
 <!doctype html>
@@ -29,15 +30,51 @@ const canonical = new URL(Astro.url.pathname, Astro.site).href;
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="theme-color" content="#fbfbf8" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#121a33" media="(prefers-color-scheme: dark)" />
+    <script is:inline>
+      // Light or dark: the visitor's choice if they made one, otherwise the system's.
+      (() => {
+        const media = matchMedia("(prefers-color-scheme: dark)");
+        const chosen = () => {
+          try {
+            return localStorage.getItem("theme");
+          } catch {
+            return null;
+          }
+        };
+        const apply = (theme) => {
+          document.documentElement.dataset.theme = theme;
+          for (const meta of document.querySelectorAll('meta[name="theme-color"]')) meta.content = theme === "dark" ? "#121a33" : "#fbfbf8";
+        };
+        apply(["light", "dark"].includes(chosen()) ? chosen() : media.matches ? "dark" : "light");
+        media.addEventListener("change", (e) => chosen() || apply(e.matches ? "dark" : "light"));
+        window.setTheme = (theme) => {
+          apply(theme);
+          try {
+            localStorage.setItem("theme", theme);
+          } catch {}
+        };
+      })();
+    </script>
     <link rel="icon" href={`${base}favicon.svg`} type="image/svg+xml" />
+    <link rel="apple-touch-icon" href={`${base}apple-touch-icon.png`} />
   </head>
   <body class="min-h-screen">
     <header class="mx-auto flex max-w-6xl items-center justify-between px-5 py-6 sm:px-8">
-      <a href={base} class="text-xl font-extrabold text-ink [font-stretch:125%]">rls-probe</a>
-      <nav class="flex items-center gap-6 text-[0.95rem] text-muted">
-        <a href={`${base}#how`} class="hidden hover:text-text sm:inline">How it works</a>
-        <a href={`${base}#guides`} class="hidden hover:text-text sm:inline">Guides</a>
-        <a href={repo} class="font-semibold text-text underline decoration-rule decoration-2 underline-offset-4 hover:decoration-ink">Source on GitHub</a>
+      <a href={base} class="logo text-xl font-extrabold text-ink [font-stretch:125%]">
+        <svg class="mark" viewBox="0 0 32 32" aria-hidden="true">
+          <g class="card"><rect x="4" y="4.5" width="23" height="23" rx="4" fill="#fffdf6" stroke="#1d3b8c" stroke-width="2.8" /><rect x="9" y="9.9" width="13" height="2.8" rx="1.4" fill="#1d3b8c" /><rect class="leak" x="9" y="14.6" width="21.5" height="2.8" rx="1.4" fill="#c2142d" /><rect x="9" y="19.3" width="13" height="2.8" rx="1.4" fill="#1d3b8c" /></g>
+        </svg>
+        <span>rls<span class="text-stamp">-</span>probe</span>
+      </a>
+      <nav class="flex items-center gap-4 text-[0.95rem] text-muted sm:gap-6">
+        <a href={`${base}#how`} class="hidden hover:text-text md:inline">How it works</a>
+        <a href={`${base}#guides`} class="hidden hover:text-text md:inline">Guides</a>
+        <a href={repo} class="hover:text-text"><span class="hidden sm:inline">Source on </span>GitHub</a>
+        <a href={hire} class="font-semibold text-text underline decoration-rule decoration-2 underline-offset-4 hover:decoration-ink">Hire me</a>
+        <button id="theme" type="button" class="theme-toggle" aria-label="Switch to dark mode" title="Switch to dark mode">
+          <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z" /></svg>
+          <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2" /><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6" /></svg>
+        </button>
       </nav>
     </header>
 
@@ -46,9 +83,26 @@ const canonical = new URL(Astro.url.pathname, Astro.site).href;
 
       <footer class="mt-24 border-t border-rule pt-6 text-[0.9rem] text-muted">
         <p>rls-probe {pkg.version}, open source under the MIT license. <a class="underline underline-offset-4" href={repo}>Source on GitHub</a>, <a class="underline underline-offset-4" href="https://www.npmjs.com/package/rls-probe">package on npm</a>.</p>
-        <p class="mt-1">Made by Ousama Ajebbar. Want your app checked and fixed by a person? <a class="underline underline-offset-4" href="https://www.upwork.com/freelancers/~012952805fd983991e">Hire me on Upwork</a>.</p>
+        <p class="mt-1">Made by Ousama Ajebbar. Want your app checked and fixed by a person? <a class="underline underline-offset-4" href={hire}>Hire me</a>.</p>
         <p class="mt-1">Not affiliated with Supabase, Lovable or Bolt.</p>
       </footer>
     </main>
+    <script is:inline>
+      {
+        const button = document.getElementById("theme");
+        const label = () => {
+          const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+          button.setAttribute("aria-label", `Switch to ${next} mode`);
+          button.title = `Switch to ${next} mode`;
+          return next;
+        };
+        label();
+        button.addEventListener("click", () => {
+          window.setTheme(label());
+          label();
+        });
+        new MutationObserver(label).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+      }
+    </script>
   </body>
 </html>

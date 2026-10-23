@@ -12,9 +12,9 @@ const cli = fileURLToPath(new URL("../src/cli.js", import.meta.url));
 const leaky = fileURLToPath(new URL("./fixtures/leaky", import.meta.url));
 const fixed = fileURLToPath(new URL("./fixtures/fixed", import.meta.url));
 
-function run(target) {
+function run(target, ...flags) {
   try {
-    return { code: 0, report: JSON.parse(execFileSync("node", [cli, target, "--json"], { encoding: "utf8" })) };
+    return { code: 0, report: JSON.parse(execFileSync("node", [cli, target, "--json", ...flags], { encoding: "utf8" })) };
   } catch (error) {
     return { code: error.status, report: JSON.parse(error.stdout) };
   }
@@ -57,7 +57,8 @@ test("the code scan finds a service role key, an open edge function and a public
   assert.ok(titles.includes("critical Supabase service role key in the code"));
   assert.ok(titles.includes("high Edge function open to anyone"));
   assert.ok(titles.includes("review Public storage bucket"));
-  assert.ok(titles.includes("high Function runs with full rights and anyone can call it"));
+  // Called as a visitor with the id of user A's order, delete_order() deleted it.
+  assert.ok(titles.includes("critical Function runs with full rights and anyone can call it"));
   assert.equal(leakyRun.code, 1);
 });
 
@@ -264,4 +265,140 @@ test("storage: who can read, change and upload into another user's folder, bucke
 
 test("--badge prints a README badge in the grade's colour", () => {
   assert.match(runText(fixed, "--badge"), /^\[!\[rls-probe: grade B\]\(https:\/\/img\.shields\.io\/badge\/rls--probe-grade%20B-1f7a4d\)\]\(https:\/\/zkousama\.github\.io\/rls-probe\/\)/);
+});
+
+// The check has to be able to say no: a fix that closes the hole by locking the owner
+// out, and one whose SQL fails, are both rejected.
+test("fixes are offered only when they close the problem and the owner keeps their rows", async () => {
+  const { runProbe } = await import("../src/engine.js");
+  const { checkFixes, verifyFixes } = await import("../src/fixes.js");
+  const { findMigrations, readMigrations } = await import("../src/node.js");
+  const { baseSnapshot } = await import("../src/snapshot.js");
+  const snapshot = await baseSnapshot();
+  const migrations = readMigrations(findMigrations(leaky));
+  const report = await runProbe({ migrations, snapshot });
+  const proposed = await verifyFixes({ migrations, report, snapshot });
+  assert.ok(proposed.length >= 6 && proposed.every((f) => f.verified), "the generated fixes pass");
+  const checked = await checkFixes({ migrations, report, snapshot, fixes: [
+    { kind: "user-read", where: "messages", sql: 'create policy "nobody reads" on public.messages as restrictive for select to authenticated using (false);' },
+    { kind: "view-bypass", where: "order_totals", sql: "alter view public.no_such_view set (security_invoker = true);" },
+  ] });
+  assert.deepEqual(checked.map((f) => f.verified), [false, false]);
+});
+
+test("--fix-policies writes the tested fixes as a migration, and a second run finds no database problem left", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rls-probe-fix-policies-"));
+  fs.cpSync(leaky, dir, { recursive: true });
+  const first = run(dir, "--fix-policies").report;
+  assert.ok(first.policyFixWritten?.endsWith("_rls_probe_security_fixes.sql"));
+  const sql = fs.readFileSync(first.policyFixWritten, "utf8");
+  assert.match(sql, /^revoke select on public\."profiles" from anon;$/m);
+  assert.match(sql, /^-- alter view public\."order_totals" set \(security_invoker = true\);$/m, "fixes for things that may be on purpose stay commented out");
+  assert.match(sql, /-- Fix these in the code, not the database:\n-- {3}Supabase service role key in the code/);
+  const after = run(dir).report;
+  assert.deepEqual(after.findings.filter((f) => f.severity !== "review").map((f) => f.kind).sort(), ["open-function", "service-key"]);
+  const orders = after.results.find((r) => r.table === "orders");
+  assert.ok(orders.A.read > 0 && orders.A.update && orders.A.delete && orders.A.insert, "the owner keeps every right to their own orders");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// is_staff() is called by the invoices policy, so revoking it would lock owners out of
+// their invoices; making the avatars bucket private would expose its files to visitors
+// through its select policy. Neither shows up on the table the fix is about.
+test("a fix that breaks something elsewhere in the database is held back", async () => {
+  const { runProbe } = await import("../src/engine.js");
+  const { checkFixes, verifyFixes } = await import("../src/fixes.js");
+  const { findMigrations, readMigrations } = await import("../src/node.js");
+  const { baseSnapshot } = await import("../src/snapshot.js");
+  const snapshot = await baseSnapshot();
+  const migrations = readMigrations(findMigrations(fileURLToPath(new URL("./fixtures/messy", import.meta.url))));
+  const report = await runProbe({ migrations, snapshot, keep: true });
+  const verdict = Object.fromEntries((await verifyFixes({ migrations, report, snapshot })).map((f) => [`${f.kind} ${f.where}`, f.verified]));
+  // Both are known to fail from the report alone, so neither is offered.
+  assert.equal(verdict["definer-function is_staff(uid uuid)"], undefined);
+  assert.equal(verdict["public-bucket storage bucket avatars"], undefined);
+  assert.equal(verdict["visitor-write photos"], true);
+  assert.equal(verdict["rls-off-users server_notes"], true);
+  assert.equal(verdict["storage-user-upload storage bucket documents"], true);
+  // Tried anyway, the revoke is caught by what it does to the invoices table.
+  const [revoke] = await checkFixes({ migrations, report, snapshot, fixes: [
+    { kind: "definer-function", where: "is_staff(uid uuid)", sql: "revoke execute on function public.is_staff(uid uuid) from public, anon, authenticated;" },
+  ] });
+  assert.equal(revoke.verified, false);
+});
+
+test("the fix prompt carries the SQL that passed the test, and what changes afterwards", () => {
+  const out = runText(leaky, "--prompt");
+  assert.match(out, /rls-probe tested this SQL on a copy of the database\. It closes the problem, and afterwards visitors who aren't signed in can't read profiles, and each signed-in user sees only their own rows\.\n\n {3}revoke select on public\."profiles" from anon;/);
+});
+
+// Each security definer function is called as a visitor and as user B, aimed at user
+// A's rows: what it does decides how serious it is, not only what its body looks like.
+test("risky functions are called, and judged by what they did to another user's rows", () => {
+  const { report } = run(fileURLToPath(new URL("./fixtures/functions", import.meta.url)));
+  const by = Object.fromEntries(report.findings.filter((f) => f.kind === "definer-function").map((f) => [f.function, f]));
+  assert.equal(by.get_profile.severity, "high");
+  assert.ok(by.get_profile.leak, "a visitor got user A's profile, email included");
+  assert.equal(by.rename_project.severity, "high");
+  assert.equal(by.rename_project.callers, "users", "only signed-in users can call it, and user B renamed A's project");
+  assert.deepEqual(by.rename_project.proof.changed, [{ table: "projects", how: "changed", columns: ["name"] }]);
+  assert.equal(by.bump_views.severity, "review", "a view counter going up is what it's for");
+  assert.deepEqual(by.bump_views.counter, { table: "projects", columns: ["view_count"] });
+  assert.equal(by.delete_my_project.severity, "review");
+  assert.ok(by.delete_my_project.tried, "called, and A's project survived");
+  const plain = explain(report).problems.map((p) => p.headline);
+  assert.ok(plain.includes("Any signed-in user can call the database function rename_project() to change other users' projects: rls-probe tried it, and the test user's row in projects was changed."));
+});
+
+// A teammate (D) joins user A's organization through org_members. What D can do with
+// A's rows is shown, not counted, and a fix may not take it away: the select fix for
+// tasks keeps "rows of a group you belong to".
+test("a teammate is seeded into A's group, and fixes keep what teammates share", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rls-probe-teams-"));
+  fs.cpSync(fileURLToPath(new URL("./fixtures/teams", import.meta.url)), dir, { recursive: true });
+  const { report } = run(dir, "--fix-policies");
+  assert.deepEqual(report.teams, ["org_members"]);
+  const tasks = report.results.find((r) => r.table === "tasks");
+  assert.ok(tasks.D.read > 0 && tasks.D.update, "a member reads and edits the organization's tasks");
+  assert.ok(!report.findings.some((f) => f.kind.startsWith("team")), "teammates' access is not a finding");
+  assert.equal(explain(report).grade, "D");
+  assert.match(explain(report).team.headline, /can see and change tasks of other members/);
+  const sql = fs.readFileSync(report.policyFixWritten, "utf8");
+  assert.match(sql, /exists \(select 1 from public\."org_members" m where m\."org_id" = "tasks"\."org_id" and m\."user_id" = \(select auth\.uid\(\)\)\)/);
+  const after = run(dir).report;
+  const fixed = after.results.find((r) => r.table === "tasks");
+  assert.equal(fixed.B.read, 0, "a stranger no longer reads the tasks");
+  assert.ok(fixed.D.read > 0 && fixed.D.update, "the teammate still reads and edits them");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// A report bigger than a pipe's buffer (64 KB) used to be cut off when rls-probe exited,
+// breaking `--json | jq` and the MCP server on large apps.
+test("a large JSON report arrives whole through a pipe", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rls-probe-large-"));
+  fs.mkdirSync(path.join(dir, "supabase", "migrations"), { recursive: true });
+  const tables = Array.from({ length: 80 }, (_, i) => `create table public.notes_${i} (id uuid primary key default gen_random_uuid(), user_id uuid not null references auth.users (id), body text);
+alter table public.notes_${i} enable row level security;
+create policy "read all ${i}" on public.notes_${i} for select to authenticated using (true);`);
+  fs.writeFileSync(path.join(dir, "supabase", "migrations", "20250101000000_many.sql"), tables.join("\n"));
+  // Through a shell pipe, as with jq: Node's own child processes use socket pairs,
+  // whose bigger buffers hid the problem.
+  const out = execFileSync("sh", ["-c", `"${process.execPath}" "${cli}" "${dir}" --json | cat`], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  assert.ok(out.length > 65536);
+  assert.equal(JSON.parse(out).results.length, 80);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("fixes not tried before the deadline are marked untested, not failed", async () => {
+  const { runProbe } = await import("../src/engine.js");
+  const { verifyFixes } = await import("../src/fixes.js");
+  const { findMigrations, readMigrations } = await import("../src/node.js");
+  const { baseSnapshot } = await import("../src/snapshot.js");
+  const snapshot = await baseSnapshot();
+  const migrations = readMigrations(findMigrations(leaky));
+  const report = await runProbe({ migrations, snapshot, keep: true });
+  const fixes = await verifyFixes({ migrations, report, snapshot, deadline: performance.now() });
+  assert.ok(fixes.length && fixes.every((f) => !f.verified && f.untested === "ran out of time"));
+  report.fixes = fixes;
+  assert.ok(explain(report).problems.every((p) => !p.selfFix?.tested), "nothing untested is offered as tested");
 });

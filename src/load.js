@@ -30,19 +30,22 @@ const REWRITE = [
 // migrations: [{ name, sql }] in the order they run. snapshot: the base database
 // to start from (see snapshot.js). grants: "legacy" gives anon, authenticated and
 // service_role every table, as Supabase did by default; "explicit" gives them
-// only what the migrations grant.
-export async function loadDatabase(migrations, { grants = "legacy", snapshot }) {
+// only what the migrations grant. from: a saved copy of a database these steps
+// already built ({ dataDir, extensions }), to run more migrations on.
+export async function loadDatabase(migrations, { grants = "legacy", snapshot, from }) {
   const statements = migrations.map((m) => ({ file: m.name, statements: splitStatements(m.sql) }));
   // Each extension PGlite loads slows its start, so beyond the ones every Supabase
   // project has, it loads only those the migrations create.
-  const wanted = new Set(statements.flatMap((f) => f.statements).map((s) => CREATE_EXTENSION.exec(withoutComments(s))?.[2].toLowerCase()).filter(Boolean));
+  const wanted = new Set([...(from?.extensions ?? []), ...statements.flatMap((f) => f.statements).map((s) => CREATE_EXTENSION.exec(withoutComments(s))?.[2].toLowerCase()).filter(Boolean)]);
   const available = await loadable(wanted);
+  const start = from?.dataDir ?? snapshot;
   const db = new PGlite({
-    loadDataDir: snapshot instanceof Blob ? snapshot : new Blob([snapshot]),
+    loadDataDir: start instanceof Blob ? start : new Blob([start]),
     extensions: { ...PREINSTALLED, ...available },
     startParams: START_PARAMS,
   });
-  if (grants === "legacy") await db.exec(LEGACY_GRANTS);
+  // A saved copy has its grants already, and the app's revokes on top of them.
+  if (grants === "legacy" && !from) await db.exec(LEGACY_GRANTS);
   const skipped = [];
   const failed = [];
   let applied = 0;
@@ -69,7 +72,7 @@ export async function loadDatabase(migrations, { grants = "legacy", snapshot }) 
   // migrations were kept. They can't be checked, and the report says so.
   const exists = new Set((await db.query(`select relname from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public'`)).rows.map((r) => r.relname));
   const missing = [...new Set(failed.map((f) => /relation "(?:public\.)?([^".]+)" does not exist/.exec(f.error)?.[1]).filter((t) => t && !exists.has(t)))].sort();
-  return { db, applied, skipped, failed, missing };
+  return { db, applied, skipped, failed, missing, extensions: [...wanted] };
 }
 
 // The PGlite modules for the extensions named, by their `create extension` name,
