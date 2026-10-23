@@ -85,6 +85,7 @@ export async function runProbe({ migrations, code = [], grants = "legacy", oct30
       if (!said) continue;
       f.intent = { verdict: said.verdict, reasons: said.reasons };
       if (said.lower && f.severity !== "review") Object.assign(f, { severity: "review", lowered: true });
+      if (said.raise && (f.severity === "review" || f.severity === "medium")) Object.assign(f, { severity: "high", raised: true });
     }
     report.findings.sort((a, b) => ORDER[a.severity] - ORDER[b.severity]);
   }

@@ -169,6 +169,13 @@
   .sev-review { color: var(--color-ink); }
   .finding summary { cursor: pointer; color: var(--color-ink); font-weight: 600; font-size: 0.95rem; width: fit-content; }
   .finding summary:hover { text-decoration: underline; }
+  /* What the app's own code says a finding was meant to be. */
+  .said { margin-top: 4px; font-size: 0.92rem; color: var(--color-muted); }
+  .said-tag { font-weight: 700; margin-right: 2px; }
+  .said-mistake .said-tag { color: var(--color-stamp); }
+  .said-purpose .said-tag { color: var(--color-pass); }
+  .said-unclear .said-tag { color: var(--color-ink); }
+  .hire-note { margin-top: 18px; padding: 12px 16px; border-left: 3px solid var(--color-ink); background: var(--color-ink-soft); font-size: 0.95rem; }
   .finding .ask { margin-top: 8px; padding: 10px 14px; border-left: 3px solid var(--color-ink); background: var(--color-ink-soft); font-size: 0.97rem; }
 
   /* The access checklist: one row per table, a mark per thing tried. */

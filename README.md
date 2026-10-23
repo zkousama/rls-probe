@@ -80,6 +80,29 @@ passed a test:
 
 Run rls-probe again afterwards to check the fix.
 
+### What your code says each finding was meant to be
+
+The database alone can't tell a public catalog from a leak. The app's code often can,
+so rls-probe reads it and gives each finding a verdict, with the evidence quoted:
+
+| Verdict | For example |
+|---|---|
+| Likely a mistake | Only server code reaches the table, with the service role or plain SQL over a direct connection, so visitors never needed access. Or the app only ever asks for the user's own rows (`.eq("user_id", user.id)`), so others' are none of their business |
+| Likely on purpose | A policy or a comment says so: `"Anyone can submit"`, `-- Allow any users to upload` |
+| Can't tell from the code | The app reads the table with the public key, and only you know whether everyone may |
+
+```
+  HIGH      Any signed-in user can see other users' notes.
+            Likely a mistake: the app only reads users' own rows (src/pages/Notes.tsx:4 filters on user_id), so seeing others' isn't needed.
+```
+
+A hint only counts for the action it's about: a "public read" policy doesn't excuse
+uploads, and "anyone can add" never excuses adding rows in someone else's name. Nothing
+rls-probe saw happen (another user's data handed over, changed or deleted) is excused
+by a comment. Only an explicit "on purpose" lowers a finding to "worth a look", and the
+app treating rows as each user's own raises a read to high. With a pasted schema and no
+code, only the migrations' own words count.
+
 ### With an agent that reads your code
 
 rls-probe sees the database your migrations build. An agent like Claude Code, Cursor
@@ -147,7 +170,7 @@ In Cursor, Windsurf, Claude Desktop or any other MCP client, add the server:
 ```json
 {
   "mcpServers": {
-    "rls-probe": { "command": "npx", "args": ["-y", "rls-probe@0.8.1", "mcp"] }
+    "rls-probe": { "command": "npx", "args": ["-y", "rls-probe@0.9.0", "mcp"] }
   }
 }
 ```

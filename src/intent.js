@@ -15,6 +15,8 @@ const TYPES_FILE = /(^|\/)(database|supabase)[.-]?types?\.[jt]s$|\.d\.ts$|(^|\/)
 const MIGRATION = /(^|\/)migrations?\//;
 // A client made with the service role or secret key, or one named as the admin client.
 const ADMIN = /service_?role|SERVICE_ROLE|SUPABASE_SECRET_KEY|sb_secret_|createAdminClient|createServiceClient|createServiceRoleClient|supabaseAdmin|adminClient|admin-client|getServiceSupabase/;
+// The signed-in user's own id, as code usually spells it.
+const SELF = /\b(user|session\??\.user|currentUser|me|viewer|profile|auth\??\.user|data\??\.user)!?\??\.(id|sub)\b|auth\.uid\(\)|getUser\(\)|currentUserId|myId/;
 // Code that runs after sign-in.
 const SIGNED_IN = /auth\.getUser|auth\.getSession|getClaims|useUser\b|useSession\b|useAuth\b|requireAuth|withAuth|currentUser|session\?\.user|redirect\(\s*['"`]\/(login|sign-?in|auth)/i;
 // Tables that take rows from anyone on purpose: forms, sign-up lists, counters.
@@ -59,6 +61,8 @@ function judge(f, report, use, migrations, publicKey) {
     return { verdict: "on purpose", reasons: [`the migrations say so: ${said.open}`], lower: true };
   }
   if (said.closed) reasons.push(`the migrations say it's not for the app's users: ${said.closed}`);
+  // Without the app's code, only what the migrations say counts.
+  if (!use.hasCode) return said.closed ? { verdict: "mistake", reasons } : null;
 
   if (!publicKey) reasons.push("the app's code doesn't seem to give visitors the public key, so outsiders may not have it; it isn't secret, though");
 
@@ -93,7 +97,8 @@ function judge(f, report, use, migrations, publicKey) {
 
   if (READS.has(f.kind)) {
     const own = owner && reads.length && reads.every((x) => x.filters.includes(owner));
-    if (own) return { verdict: "mistake", reasons: [`the app only reads users' own rows (${at(reads[0])} filters on ${owner}), so seeing others' isn't needed`, ...reasons] };
+    // The app treats the rows as each user's own: others reading them is a leak, whatever the columns are called.
+    if (own) return { verdict: "mistake", reasons: [`the app only reads users' own rows (${at(reads[0])} filters on ${owner}), so seeing others' isn't needed`, ...reasons], raise: true };
     if (/^visitor-|^storage-visitor-|^rls-off$/.test(f.kind) && reads.length && reads.every((x) => x.signedIn)) {
       return { verdict: "mistake", reasons: [`the app reads ${name} only after sign-in (${at(reads[0])}), so visitors don't need it`, ...reasons] };
     }
@@ -109,7 +114,7 @@ function judge(f, report, use, migrations, publicKey) {
   }
   const ownWrites = owner && writes.length && writes.every((x) => x.filters.includes(owner));
   if (ownWrites) return { verdict: "mistake", reasons: [`the app only changes users' own rows (${at(writes[0])} filters on ${owner}), so changing others' isn't needed`, ...reasons] };
-  return { verdict: "unclear", reasons: [`the app ${writes.length ? `changes ${name} with the public key (${at(writes[0])})` : `uses ${name} with the public key (${at(u.user[0])})`}; whether others may do the same depends on what it's for`, ...reasons] };
+  return { verdict: "unclear", reasons: [`the app ${writes.length ? `writes to ${name} with the public key (${at(writes[0])})` : `uses ${name} with the public key (${at(u.user[0])})`}; whether others may do the same depends on what it's for`, ...reasons] };
 }
 
 // What the migrations say about a finding: the names of the policies that grant the
@@ -198,7 +203,10 @@ function usage(code) {
       // The chain ends at a statement's end, a blank line or the next statement.
       const chain = m[3].split(/;|\n\s*\n|\n\s*(?:const|let|var|return|if|await|for|export|function)\b/)[0];
       const ops = new Set([...chain.matchAll(/\.(select|insert|upsert|update|delete|upload|download|list|remove|getPublicUrl|createSignedUrl)\(/g)].map((x) => x[1]));
-      const filters = [...chain.matchAll(/\.(?:eq|match|in)\(\s*\{?\s*['"`]?([\w.]+)['"`]?/g)].map((x) => x[1]);
+      // Columns the query pins to the signed-in user's own id (user.id, session.user.id,
+      // auth.uid()); a uid passed in from elsewhere may be anyone's.
+      const filters = [...chain.matchAll(/\.(?:eq|match)\(\s*\{?\s*['"`]?([\w.]+)['"`]?\s*[,:]\s*([^),}]+)/g)]
+        .filter((x) => SELF.test(x[2])).map((x) => x[1]);
       const entry = { path, line: lineOf(m.index), admin, signedIn, ops, filters };
       if (m[1] || [...ops].some((o) => ["upload", "download", "list", "remove", "getPublicUrl", "createSignedUrl"].includes(o))) {
         if (ops.has("list") || ops.has("download") || ops.has("getPublicUrl") || ops.has("createSignedUrl")) ops.add("select");
@@ -209,6 +217,8 @@ function usage(code) {
   }
   return {
     tables, storage, rpc,
+    // Whether there's any app code to judge by (a pasted schema has none).
+    hasCode: app.length > 0,
     // Plain SQL naming the table in code (a direct database connection, server side).
     sql: (name) => find(new RegExp(`\\b(from|into|update|join)\\s+(?:"?public"?\\.)?"?${word(name)}"?\\b`, "i")),
     // The table's name as a string in user-facing code: not server code, not the

@@ -1,6 +1,6 @@
 // The page: reads an app from a GitHub link, a folder, a ZIP or pasted SQL, runs
 // rls-probe on it in this browser, and shows the inspection.
-import { badge, explain, fixPrompt } from "../../../src/explain.js";
+import { INTENT, badge, explain, fixPrompt } from "../../../src/explain.js";
 import { renderGrants } from "../../../src/grants.js";
 import { chooseFiles } from "../../../src/project.js";
 import { reviewBrief } from "../../../src/review.js";
@@ -399,15 +399,26 @@ function show(report, project, testing) {
   const status = el("p", { className: "mb-2 text-[0.95rem] text-muted", ariaLive: "polite" }, ...(testing.size ? [el("span", { className: "spinner" }), "Testing a fix for each problem on a copy of your database…"] : []));
   const all = el("div", {});
 
+  // What the app's own code says each finding was meant to be, and, where it can't tell,
+  // the offer of a person who reads the code.
+  const said = (item) => item.intent
+    ? [el("p", { className: `said said-${{ mistake: "mistake", "on purpose": "purpose", unclear: "unclear" }[item.intent.verdict]}` },
+      el("span", { className: "said-tag" }, INTENT[item.intent.verdict]), " ", capitalize(item.intent.reasons[0].replace(/[^.?!]$/, "$&.")))]
+    : [];
+  const unclear = [...e.problems, ...e.notes].some((i) => i.intent?.verdict === "unclear");
+  const hire = unclear ? [el("p", { className: "hire-note" }, "rls-probe can't tell what some of these are meant to be from your code alone. A person reading your code can settle them. ",
+    el("a", { href: HIRE, className: "font-semibold text-ink underline decoration-2 underline-offset-4" }, "Hire me"), ".")] : [];
+
   const sections = [];
   if (e.problems.length) {
     sections.push(section("Problems", null, status, el("div", {}, ...e.problems.map((p) => el("div", { className: "finding" },
       el("span", { className: `sev sev-${p.severity}` }, SEVERITY[p.severity]),
       el("div", {},
         el("p", { className: "font-semibold" }, p.headline),
+        ...said(p),
         el("details", { className: "mt-1.5" }, el("summary", {}, "What to change"), el("p", { className: "ask" }, p.ask), slot(p)),
       ),
-    ))), all));
+    ))), all, ...hire));
   }
   if (report.results.length) sections.push(checklist(report));
   let shareCanvas = null;
@@ -429,8 +440,8 @@ function show(report, project, testing) {
   if (e.notes.length) {
     sections.push(section("Worth checking", "Fine if they're on purpose.", el("div", {}, ...e.notes.map((n) => el("div", { className: "finding" },
       el("span", { className: "sev sev-review" }, "Check"),
-      el("div", {}, el("p", {}, n.headline), el("details", { className: "mt-1.5" }, el("summary", {}, "If it isn't on purpose"), el("p", { className: "ask" }, n.ask), slot(n))),
-    )))));
+      el("div", {}, el("p", {}, n.headline), ...said(n), el("details", { className: "mt-1.5" }, el("summary", {}, "If it isn't on purpose"), el("p", { className: "ask" }, n.ask), slot(n))),
+    ))), ...(e.problems.length ? [] : hire)));
   }
   if (e.accepted.length || e.acceptNotes.length) {
     sections.push(section("Accepted by you", "Listed in your rls-probe.json with a reason, so they don't count toward the grade.",

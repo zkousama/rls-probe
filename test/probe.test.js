@@ -552,3 +552,24 @@ test("a table without owners that holds private columns is fixed to server-only"
   report.fixes = [fix];
   assert.match(explain(report).problems[0].ask, /only server code using the service role can reach it.*never one that lets them read email/);
 });
+
+// What a finding was meant to be, read from the app's own code and migrations: only the
+// service role or plain SQL reaches it (so nobody else needed access), the app keeps to
+// users' own rows, a policy and comment say anyone may send a message, a public feed reads
+// every post (can't tell).
+test("the app's code and migrations say what each finding was meant to be", () => {
+  const { report } = run(fileURLToPath(new URL("./fixtures/intent", import.meta.url)));
+  const said = Object.fromEntries(report.findings.map((f) => [`${f.kind}:${f.where}`, [f.severity, f.intent?.verdict, f.intent?.reasons[0]]]));
+  assert.deepEqual(said["rls-off:waitlist"].slice(0, 2), ["critical", "mistake"]);
+  assert.match(said["rls-off:waitlist"][2], /only with the service role \(supabase\/functions\/join\/index\.ts:5\)/);
+  assert.deepEqual(said["rls-off:legacy_stats"].slice(0, 2), ["critical", "mistake"]);
+  assert.match(said["rls-off:legacy_stats"][2], /plain SQL from server code \(server\/stats\.ts:3\)/);
+  assert.deepEqual(said["user-read:notes"].slice(0, 2), ["high", "mistake"], "the app treats notes as each user's own, so reading others' is a leak");
+  assert.deepEqual(said["visitor-write:contact_messages"].slice(0, 2), ["review", "on purpose"]);
+  assert.match(said["visitor-write:contact_messages"][2], /"Anyone can submit"/);
+  assert.equal(said["impersonation:contact_messages"][1], "unclear", "anyone may send a message, but not in someone else's name");
+  assert.deepEqual(said["user-read:posts"].slice(0, 2), ["review", "unclear"]);
+  // Without the app's code (a pasted schema), only what the migrations say counts.
+  const schema = run(path.join(fileURLToPath(new URL("./fixtures/intent", import.meta.url)), "supabase", "migrations", "20250101000000_app.sql")).report;
+  assert.ok(schema.findings.filter((f) => f.where !== "contact_messages").every((f) => !f.intent));
+});

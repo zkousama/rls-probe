@@ -1,6 +1,6 @@
 {
   "name": "rls-probe",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "description": "Finds what a visitor, or another signed-in user, can read and change in a Supabase app by running its migrations offline, explains it in plain words, and tells your AI builder what to fix. CLI, GitHub Action and MCP server.",
   "keywords": [
     "supabase",
