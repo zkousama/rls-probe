@@ -173,8 +173,11 @@ test("the other user is a plain stranger: no staff role, not in A's organization
 });
 
 test("real holes in a messy app are still found", () => {
-  // Visitors can only add photos: high, since forms do that on purpose; changing or deleting is critical.
-  assert.ok(messyFindings.includes("high photos: Visitors who aren't signed in can add rows"), "seeded through a LIKE check");
+  // Probed, though seeded through a LIKE check. Visitors can only add photos, and the insert
+  // policy is named "anyone uploads", so the app's own migration says that's on purpose.
+  const photos = messy.report.findings.find((f) => f.kind === "visitor-write" && f.where === "photos");
+  assert.ok(photos, "seeded through a LIKE check");
+  assert.deepEqual([photos.severity, photos.intent.verdict], ["review", "on purpose"]);
   assert.ok(messyFindings.includes("high posts: Visitors can read users' data"), "row_security = off didn't leak");
   assert.ok(messyFindings.includes("high server_notes: Row-level security is off"), "reported though visitors are revoked");
   assert.ok(messyFindings.includes("high app_settings: Any signed-in user can change shared data"), "updated_by doesn't make it owned");

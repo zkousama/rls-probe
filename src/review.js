@@ -6,7 +6,7 @@
 // before changing anything, and records the ones it rules out in rls-probe.json, so the
 // next run lists them as accepted instead of flagging them again.
 import { CONFIG, findingId } from "./accept.js";
-import { explain } from "./explain.js";
+import { INTENT, explain } from "./explain.js";
 
 const LABEL = { critical: "CRITICAL", high: "HIGH", medium: "MEDIUM", review: "CHECK" };
 const DID = { read: "read", update: "change", delete: "delete", insert: "add" };
@@ -40,6 +40,7 @@ export function reviewBrief(report) {
     const f = report.findings.find((x) => findingId(x) === item.id);
     out.push("", `## ${i + 1}. ${LABEL[item.severity]} \`${item.id}\``, "", item.headline, "");
     out.push(`What rls-probe saw: ${evidence(f, report)}`, "");
+    if (item.intent) out.push(`What the app's code says: ${INTENT[item.intent.verdict].toLowerCase()}; ${item.intent.reasons.join("; ")}.`, "");
     const at = where(f, report);
     if (at.length) out.push(`Where: ${at.join("; ")}.`, "");
     const sql = check(f, report);

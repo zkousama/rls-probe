@@ -1,6 +1,7 @@
 // The whole probe as one call, with no file or Node access: the CLI, the MCP
 // server and the web page all hand it the app's files and get the report back.
-import { applyAccept, readAccept } from "./accept.js";
+import { applyAccept, findingId, readAccept } from "./accept.js";
+import { readIntent } from "./intent.js";
 import { grantsReport } from "./grants.js";
 import { loadDatabase } from "./load.js";
 import { probeFunctions, probeStorage, probeTables, probeViews } from "./probe.js";
@@ -75,6 +76,18 @@ export async function runProbe({ migrations, code = [], grants = "legacy", oct30
     createdAt: locate(migrations),
     policyAt: locatePolicies(migrations),
   };
+  // What the app's code and migrations say each finding was meant to be. An explicit
+  // "meant for everyone" makes it something to check rather than a problem.
+  if (code.length || migrations.length) {
+    const intent = readIntent(report, code, migrations);
+    for (const f of report.findings) {
+      const said = intent[findingId(f)];
+      if (!said) continue;
+      f.intent = { verdict: said.verdict, reasons: said.reasons };
+      if (said.lower && f.severity !== "review") Object.assign(f, { severity: "review", lowered: true });
+    }
+    report.findings.sort((a, b) => ORDER[a.severity] - ORDER[b.severity]);
+  }
   if (migrated) Object.defineProperty(report, "migrated", { value: migrated, enumerable: false });
   // Roughly what trying a set of fixes costs: everything after the migrations.
   Object.defineProperty(report, "trialTime", { value: performance.now() - seeded, enumerable: false });
@@ -95,14 +108,13 @@ export async function runProbe({ migrations, code = [], grants = "legacy", oct30
 // The first file and line that creates each policy, by table and name.
 function locatePolicies(migrations) {
   const out = {};
+  // Over the whole file: a policy's name and its table are often on different lines.
   const create = /\bcreate\s+policy\s+(?:"([^"]+)"|(\w+))\s+on\s+(?:"?(\w+)"?\s*\.\s*)?"?(\w+)"?/gi;
   for (const m of migrations) {
-    m.sql.split("\n").forEach((line, i) => {
-      for (const hit of line.matchAll(create)) {
-        const table = hit[3] === "storage" ? `storage.${hit[4]}` : hit[4];
-        (out[table] ??= {})[hit[1] ?? hit[2]] ??= { file: m.name, line: i + 1 };
-      }
-    });
+    for (const hit of m.sql.matchAll(create)) {
+      const table = hit[3] === "storage" ? `storage.${hit[4]}` : hit[4];
+      (out[table] ??= {})[hit[1] ?? hit[2]] ??= { file: m.name, line: m.sql.slice(0, hit.index).split("\n").length };
+    }
   }
   return out;
 }

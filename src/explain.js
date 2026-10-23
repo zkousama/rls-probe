@@ -7,9 +7,11 @@ import { teamReach } from "./report.js";
 const SEE = { read: "see", update: "change", delete: "delete", insert: "add" };
 const CMD = { read: "SELECT", update: "UPDATE", delete: "DELETE", insert: "INSERT" };
 const LABEL = { critical: "CRITICAL", high: "HIGH", medium: "MEDIUM", review: "CHECK" };
+// What the app's code says about a finding (intent.js), in words.
+export const INTENT = { mistake: "Likely a mistake", "on purpose": "Likely on purpose", unclear: "Can't tell from the code" };
 
 export function explain(report) {
-  const items = report.findings.map((f) => ({ id: findingId(f), severity: f.severity, kind: f.kind, where: f.where, ...say(f, report), selfFix: selfFix(f, report) }));
+  const items = report.findings.map((f) => ({ id: findingId(f), severity: f.severity, kind: f.kind, where: f.where, ...say(f, report), selfFix: selfFix(f, report), intent: f.intent }));
   const g = report.grantsChange;
   return {
     grade: grade(report),
@@ -66,7 +68,10 @@ export function badge(report) {
 export function renderPlain(report) {
   const e = explain(report);
   const out = [`rls-probe: ${e.grade ? `grade ${e.grade}. ` : ""}${capitalize(e.verdict)}`, ""];
-  for (const p of e.problems) out.push(`  ${LABEL[p.severity].padEnd(8)}  ${p.headline}`);
+  for (const p of e.problems) {
+    out.push(`  ${LABEL[p.severity].padEnd(8)}  ${p.headline}`);
+    if (p.intent) out.push(`            ${INTENT[p.intent.verdict]}: ${p.intent.reasons[0].replace(/[^.?!]$/, "$&.")}`);
+  }
   if (e.problems.length) out.push("");
   if (e.notes.length) {
     out.push("Worth a look, and fine if it's on purpose:");

@@ -2,7 +2,7 @@
 // built bundles and env files. Shared with whatever gathers the files (node.js
 // walks a folder; the web page reads a repository).
 export const SKIP_DIRS = new Set(["node_modules", ".git", ".next", ".turbo", ".vercel", "coverage", ".cache"]);
-const EXTENSIONS = /\.(js|jsx|ts|tsx|mjs|cjs|vue|svelte|astro|html|json)$|^\.env/;
+const EXTENSIONS = /\.(js|jsx|ts|tsx|mjs|cjs|vue|svelte|astro|html|json|py)$|^\.env/;
 export const CONFIG = "supabase/config.toml";
 
 // Whether a file, by its path relative to the app's root ("/" separated), is one
@@ -31,7 +31,7 @@ const SECRETS = [
 
 // Tests and their fixtures: a key there is usually made up for the test. It never
 // reaches a browser either, though a real one is still public in a public repository.
-const TEST_FILE = /(^|\/)(__tests__|__mocks__|tests?|spec|fixtures?|mocks?|e2e|cypress|playwright)\/|\.(test|spec|e2e)\.[cm]?[jt]sx?$|(^|\/)\.env\.([\w.-]*\.)?(example|sample|template|dist|defaults)$/;
+export const TEST_FILE = /(^|\/)(__tests__|__mocks__|tests?|spec|fixtures?|mocks?|e2e|cypress|playwright)\/|\.(test|spec|e2e)\.[cm]?[jt]sx?$|(^|\/)\.env\.([\w.-]*\.)?(example|sample|template|dist|defaults)$/;
 
 // The keys every local Supabase (supabase start) prints: the same for everyone, and they
 // open nothing but that local database. Docs and example files are full of them.
