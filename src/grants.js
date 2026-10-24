@@ -11,7 +11,7 @@ export async function grantsReport(explicitDb, findings) {
     select c.relname as name, c.relrowsecurity as rls
     from pg_class c join pg_namespace n on n.oid = c.relnamespace
     where n.nspname = 'public' and c.relkind in ('r', 'p') order by c.relname`)).rows;
-  const policies = (await explicitDb.query(`select tablename as table, cmd, roles::text[] as roles, qual, with_check as check from pg_policies where schemaname = 'public'`)).rows;
+  const policies = (await explicitDb.query(`select tablename as table, cmd, roles::text[] as roles, qual, with_check as check, permissive = 'PERMISSIVE' as permissive from pg_policies where schemaname = 'public'`)).rows;
 
   const out = { breaks: [], unsafe: [], closedNoRls: [], fine: [], noPolicies: [], server: [] };
   for (const t of tables) {
@@ -28,23 +28,7 @@ export async function grantsReport(explicitDb, findings) {
       out.server.push({ table: t.name, missing: serverMissing, grant: [...grantLines(t.name, serverMissing), ...sequenceLines(serverSequences)] });
     }
 
-    const needed = new Set();
-    for (const p of policies.filter((x) => x.table === t.name)) {
-      // A policy for everyone only lets signed-in users through when every alternative
-      // in its rule needs auth.uid(). "Public games, or the host's own" lets visitors in;
-      // "the sender or the recipient" doesn't. (An approximation: it splits on OR.)
-      const rule = `${p.qual ?? ""} ${p.check ?? ""}`.trim();
-      const needsUser = rule !== "" && rule.split(/\bOR\b/i).every((part) => /auth\.uid\(\)/.test(part));
-      const cmds = p.cmd === "ALL" ? COMMANDS : [p.cmd];
-      for (const cmd of cmds) {
-        // Visitors get writes only from a policy that names anon. Through a policy for
-        // everyone, visitor writes are what the probe reports as a hole.
-        const visitorsToo = cmd === "SELECT" ? !needsUser : false;
-        const roles = p.roles.flatMap((r) => (r === "public" ? (visitorsToo ? ["anon", "authenticated"] : ["authenticated"]) : [r]))
-          .filter((r) => r === "anon" || r === "authenticated");
-        for (const role of roles) needed.add(`${role} ${cmd}`);
-      }
-    }
+    const needed = neededFor(t.name, policies);
     const missing = [];
     for (const key of needed) {
       const [role, cmd] = key.split(" ");
@@ -75,7 +59,78 @@ export async function grantsReport(explicitDb, findings) {
     if (problems.length) out.unsafe.push({ table: t.name, missing, problems });
     else out.breaks.push({ table: t.name, missing, grant: [...grantLines(t.name, missing), ...sequenceLines(sequences)] });
   }
+
+  // Views lose the old grants too. One that follows the tables' rules (security_invoker)
+  // is as safe to grant as the tables under it. One that runs as its owner, or a
+  // materialized view, shows every row it selects: safe only for a role those tables hide
+  // nothing from. A role is granted a view when it may read every table under it.
+  const views = (await explicitDb.query(`
+    select c.relname as name, c.relkind = 'm' as materialized,
+      coalesce((select lower(option_value) in ('true', 'on', '1') from pg_options_to_table(c.reloptions) where option_name = 'security_invoker'), false) as invoker,
+      array(select distinct t.relname::text from pg_rewrite r join pg_depend d on d.objid = r.oid join pg_class t on t.oid = d.refobjid
+        where r.ev_class = c.oid and d.refobjid <> c.oid and t.relkind in ('r', 'p') order by 1) as tables
+    from pg_class c join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public' and c.relkind in ('v', 'm') order by c.relname`).catch(() => ({ rows: [] }))).rows;
+  for (const v of views) {
+    const serverMissing = [];
+    for (const cmd of COMMANDS) if (!(await hasTablePrivilege(explicitDb, "service_role", v.name, cmd))) serverMissing.push({ role: "service_role", cmd });
+    if (serverMissing.length) out.server.push({ table: v.name, view: true, missing: serverMissing, grant: grantLines(v.name, serverMissing) });
+    if (!v.tables.length) continue;
+    const missing = [];
+    for (const role of ["anon", "authenticated"]) {
+      if (v.tables.every((t) => neededFor(t, policies).has(`${role} SELECT`)) && !(await hasTablePrivilege(explicitDb, role, v.name, "SELECT"))) missing.push({ role, cmd: "SELECT" });
+    }
+    if (!missing.length) continue;
+    const problems = v.tables.flatMap((t) => findings.filter((f) => f.where === t && f.severity !== "review").map((f) => `${t}: ${f.title}`));
+    const exposed = v.invoker ? [] : missing.filter((m) => !v.tables.every((t) => readsAll(t, m.role, policies)));
+    if (exposed.length) {
+      const who = exposed.map((m) => (m.role === "anon" ? "visitors" : "signed-in users")).join(" and ");
+      problems.push(v.materialized
+        ? `a materialized view keeps its own copy of the rows, with no row-level security, so a grant would show ${who} every row of ${v.tables.join(", ")}`
+        : `it runs as its owner, so a grant would show ${who} every row of ${v.tables.join(", ")}; make it security_invoker first (alter view public.${quote(v.name)} set (security_invoker = true);)`);
+    }
+    if (problems.length) out.unsafe.push({ table: v.name, view: true, missing, problems });
+    else out.breaks.push({ table: v.name, view: true, missing, grant: grantLines(v.name, missing) });
+  }
   return out;
+}
+
+// The grants a table's policies call for, as "role COMMAND" ("anon SELECT").
+function neededFor(table, policies) {
+  const needed = new Set();
+  for (const p of policies.filter((x) => x.table === table)) {
+    // A policy for everyone only lets signed-in users through when every alternative
+    // in its rule needs auth.uid(). "Public games, or the host's own" lets visitors in;
+    // "the sender or the recipient" doesn't. (An approximation: it splits on OR.)
+    const rule = `${p.qual ?? ""} ${p.check ?? ""}`.trim();
+    const needsUser = rule !== "" && rule.split(/\bOR\b/i).every((part) => /auth\.uid\(\)/.test(part));
+    const cmds = p.cmd === "ALL" ? COMMANDS : [p.cmd];
+    for (const cmd of cmds) {
+      // Visitors get writes only from a policy that names anon. Through a policy for
+      // everyone, visitor writes are what the probe reports as a hole.
+      const visitorsToo = cmd === "SELECT" ? !needsUser : false;
+      const roles = p.roles.flatMap((r) => (r === "public" ? (visitorsToo ? ["anon", "authenticated"] : ["authenticated"]) : [r]))
+        .filter((r) => r === "anon" || r === "authenticated");
+      for (const role of roles) needed.add(`${role} ${cmd}`);
+    }
+  }
+  return needed;
+}
+
+// Whether a role reads every row of a table: a permissive select policy of "true" for it,
+// and no restrictive one that holds rows back.
+function readsAll(table, role, policies) {
+  const reads = policies.filter((p) => p.table === table && (p.cmd === "SELECT" || p.cmd === "ALL") && p.roles.some((r) => r === role || r === "public"));
+  return reads.some((p) => p.permissive && (p.qual ?? "").trim() === "true") && !reads.some((p) => !p.permissive && (p.qual ?? "").trim() !== "true");
+}
+
+// "2 tables and 3 views".
+export function howMany(entries) {
+  const count = (view, word) => {
+    const n = entries.filter((e) => Boolean(e.view) === view).length;
+    return n ? `${n} ${word}${n === 1 ? "" : "s"}` : null;
+  };
+  return [count(false, "table"), count(true, "view")].filter(Boolean).join(" and ");
 }
 
 async function anyGrant(db, table) {
@@ -127,7 +182,7 @@ export function renderGrants(report) {
   const out = ["", "Supabase grants change (from May 30, 2026 for new projects; October 30, 2026 for new tables everywhere)", ""];
   const n = report.breaks.length + report.unsafe.length;
   out.push(n
-    ? `${n} tables get their API access only from Supabase's old default grants. Tables that already exist keep their grants, but in a new project, a fresh database, a preview branch, or for any table created like this from October 30, the API answers "permission denied" (42501) until the migrations grant it.`
+    ? `${howMany([...report.breaks, ...report.unsafe])} get their API access only from Supabase's old default grants. Those that already exist keep their grants, but in a new project, a fresh database, a preview branch, or for any created like this from October 30, the API answers "permission denied" (42501) until the migrations grant it.`
     : "Every table with policies already has the grants its policies need.");
   if (report.breaks.length) {
     out.push("", "Safe to grant: row-level security already limits these to the right rows.");
@@ -166,7 +221,7 @@ export function migrationFor(report, version) {
     lines.push(
       "",
       "-- The service role key, used by edge functions and server code, skips row-level",
-      "-- security and never reaches a browser, so it gets every table.",
+      "-- security and never reaches a browser, so it gets every table and view.",
       ...report.server.flatMap((s) => s.grant),
     );
   }

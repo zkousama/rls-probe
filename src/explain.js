@@ -3,6 +3,7 @@
 // report: the policy names, owner columns and grants are the app's own.
 import { findingId } from "./accept.js";
 import { describeFewer, describeLevel, doing } from "./access.js";
+import { howMany } from "./grants.js";
 import { teamReach } from "./report.js";
 
 const SEE = { read: "see", update: "change", delete: "delete", insert: "add" };
@@ -178,8 +179,8 @@ function grantsPart(g) {
   const holdBack = [...g.unsafe.map((u) => u.table), ...g.closedNoRls.map((c) => c.table)];
   const stop = g.breaks.length + g.unsafe.length;
   const parts = [];
-  if (stop) parts.push(`${stop} table${stop === 1 ? "" : "s"} will answer "permission denied" to your users in a fresh database until they're granted access${g.breaks.length ? `; ${g.breaks.length} ${g.breaks.length === 1 ? "is" : "are"} safe to grant now` : ""}${holdBack.length ? `, and ${list(holdBack, "and")} must be fixed first` : ""}.`);
-  if (g.server.length) parts.push(`Your edge functions and server code need grants on ${g.server.length} table${g.server.length === 1 ? "" : "s"} too.`);
+  if (stop) parts.push(`${howMany([...g.breaks, ...g.unsafe])} will answer "permission denied" to your users in a fresh database until they're granted access${g.breaks.length ? `; ${g.breaks.length} ${g.breaks.length === 1 ? "is" : "are"} safe to grant now` : ""}${holdBack.length ? `, and ${list(holdBack, "and")} must be fixed first` : ""}.`);
+  if (g.server.length) parts.push(`Your edge functions and server code need grants on ${howMany(g.server)} too.`);
   // summary: what changes, said anywhere; headline adds how to act from the command line.
   const summary = parts.length ? parts.join(" ") : "Every table already has the grants it needs.";
   const headline = `After October 30: ${summary}${parts.length ? " Run rls-probe with --fix to write the safe grants as a migration." : ""}`;

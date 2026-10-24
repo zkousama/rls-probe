@@ -6,6 +6,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { explain } from "../src/explain.js";
+import { renderGrants } from "../src/grants.js";
 import { splitStatements } from "../src/split.js";
 
 const cli = fileURLToPath(new URL("../src/cli.js", import.meta.url));
@@ -86,7 +87,8 @@ test("--oct30 sorts tables into safe to grant, fix first, and closed only by mis
 });
 
 // These are the grants a real local Supabase, opted into the change, was checked
-// against with scripts/compare-grants-with-supabase.mjs: 30 of 30 checks passed.
+// against with scripts/compare-grants-with-supabase.mjs: 30 of 30 checks passed. The view
+// (order_totals, security_invoker over orders) came later and wasn't part of that check.
 test("--oct30 suggests exactly the grants the policies need, sequences included", () => {
   const lines = runWith(newGrants, "--oct30").grantsChange.breaks.flatMap((b) => b.grant);
   assert.deepEqual(lines, [
@@ -97,6 +99,7 @@ test("--oct30 suggests exactly the grants the policies need, sequences included"
     "grant select, update on public.profiles to authenticated;",
     "grant select, insert, update, delete on public.tags to authenticated;",
     "grant usage on sequence public.tags_id_seq to authenticated;",
+    "grant select on public.order_totals to authenticated;",
   ]);
 });
 
@@ -113,6 +116,7 @@ test("--oct30 grants the service role every table, and the sequences behind its 
     "grant select, insert, update, delete on public.profiles to service_role;",
     "grant select, insert, update, delete on public.tags to service_role;",
     "grant usage on sequence public.tags_id_seq to service_role;",
+    "grant select, insert, update, delete on public.order_totals to service_role;",
   ]);
 });
 
@@ -745,6 +749,35 @@ end $$;
   assert.equal(how["definer-function:wipe_notes(p_user uuid)"], "tried");
   assert.equal(how["definer-function:resize(p_span span)"], "read");
   assert.equal(Object.entries(how).find(([id]) => id.startsWith("service-key"))?.[1], "read");
+});
+
+// Views lose the old default grants too. One that follows the tables' rules is as safe to
+// grant as the tables under it; one that runs as its owner shows every row it selects, so
+// it's safe only where those tables hide nothing from that role. The service key gets them all.
+test("views get the grants the October 30 change takes away, and the unsafe ones are held back", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rls-probe-views-"));
+  fs.mkdirSync(path.join(dir, "supabase", "migrations"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "supabase", "migrations", "20250101000000_app.sql"), `
+create table public.notes (id uuid primary key default gen_random_uuid(), user_id uuid not null references auth.users (id), body text);
+alter table public.notes enable row level security;
+create policy "own notes" on public.notes for all to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
+create table public.categories (id bigint generated always as identity primary key, name text);
+alter table public.categories enable row level security;
+create policy "anyone reads categories" on public.categories for select using (true);
+create view public.my_notes with (security_invoker = true) as select id, body from public.notes;
+create view public.note_stats as select user_id, count(*) as n from public.notes group by user_id;
+create view public.category_list as select name from public.categories;
+`);
+  const g = runWith(dir, "--oct30").grantsChange;
+  const safe = g.breaks.flatMap((b) => b.grant);
+  assert.ok(safe.includes("grant select on public.my_notes to authenticated;"), "it follows the notes policies");
+  assert.ok(safe.includes("grant select on public.category_list to anon, authenticated;"), "categories hide nothing from anyone");
+  const held = g.unsafe.find((u) => u.table === "note_stats");
+  assert.match(held.problems.join(" "), /runs as its owner.*security_invoker/);
+  const server = g.server.flatMap((s) => s.grant);
+  for (const v of ["my_notes", "note_stats", "category_list"]) assert.ok(server.includes(`grant select, insert, update, delete on public.${v} to service_role;`), v);
+  assert.match(renderGrants(g), /^2 tables and 3 views get their API access only from Supabase's old default grants/m);
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 // What a key looks like isn't a key: another service's sk- key, a placeholder, code that

@@ -214,7 +214,7 @@ In Cursor, Windsurf, Claude Desktop or any other MCP client, add the server:
 ```json
 {
   "mcpServers": {
-    "rls-probe": { "command": "npx", "args": ["-y", "rls-probe@0.10.4", "mcp"] }
+    "rls-probe": { "command": "npx", "args": ["-y", "rls-probe@0.10.5", "mcp"] }
   }
 }
 ```
@@ -351,7 +351,11 @@ fix for 42501, a grant on every table, would expose every row.
 The grants it suggests are the ones each table's policies need, including
 `usage` on the sequence behind a `serial` id when users insert rows. The service
 role loses its old grants too, so edge functions and server code need their own;
-those are listed apart, for every table.
+those are listed apart, for every table and view.
+Views lose their grants the same way. A view that follows the tables' rules
+(`security_invoker`) is as safe to grant as the tables under it; one that runs as its
+owner, or a materialized view, shows every row it selects, so it's held back unless
+those tables hide nothing from that role, with the `alter view` that makes it safe.
 `--fix` writes them as a new migration next to the others, with the tables it
 held back listed as comments, so the change is a file to read and commit.
 `--grants=explicit` runs the whole probe as a project without the old grants.
@@ -442,7 +446,7 @@ files each), every run finishes, most in 2 to 4 seconds. Testing the fixes as we
 (`--test-fixes`, `--prompt`, `--fix-policies`) takes 2 to 19 seconds, 4 for the median
 app. On the largest (402 tables) it stops after three minutes, by which time 364 of its
 376 fixes are verified and the rest are marked untested. Of the 348 fixes proposed for
-the other 24 apps, 346 passed (0.10.4).
+the other 24 apps, 346 passed (0.10.5).
 
 ## Limits
 
