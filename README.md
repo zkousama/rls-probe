@@ -214,7 +214,7 @@ In Cursor, Windsurf, Claude Desktop or any other MCP client, add the server:
 ```json
 {
   "mcpServers": {
-    "rls-probe": { "command": "npx", "args": ["-y", "rls-probe@0.10.1", "mcp"] }
+    "rls-probe": { "command": "npx", "args": ["-y", "rls-probe@0.10.2", "mcp"] }
   }
 }
 ```
@@ -438,7 +438,7 @@ files each), every run finishes, most in 2 to 4 seconds. Testing the fixes as we
 (`--test-fixes`, `--prompt`, `--fix-policies`) takes 2 to 19 seconds, 4 for the median
 app. On the largest (402 tables) it stops after three minutes, by which time 364 of its
 376 fixes are verified and the rest are marked untested. Of the 348 fixes proposed for
-the other 24 apps, 346 passed (0.10.1).
+the other 24 apps, 346 passed (0.10.2).
 
 ## Limits
 
