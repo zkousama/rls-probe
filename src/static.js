@@ -97,19 +97,61 @@ function scanFunctions(files) {
       // A signed-in user, a webhook signature (Stripe, Svix, Supabase's own hooks through
       // standardwebhooks), or a shared secret in a header all count as checking.
       const checksCaller = /auth\.getUser|getClaims|Authorization|stripe\.webhooks\.constructEvent|constructEventAsync|x-signature|svix|verifySignature|standardwebhooks|new Webhook\(|timingSafeEqual|headers\.get\(\s*["'`]x-[\w-]*(secret|signature|token|key)["'`]/i.test(source);
+      // Or code it imports does (a key middleware in a shared folder): there it counts only
+      // when what's imported is named for a check (requireKey, middlewareAuth) and the file
+      // reads a key or token; plumbing every function imports (createApp, cors) doesn't.
+      const shared = checksCaller ? null : imported(files, code).find((x) => x.names.some((n) => CHECK_NAME.test(n)) && READS_KEY.test(x.file.text))?.file;
       findings.push({
         kind: "open-function",
         function: current,
-        severity: checksCaller ? "review" : "high",
+        severity: checksCaller || shared ? "review" : "high",
         where: `supabase/functions/${current}`,
         title: "Edge function open to anyone",
         detail: checksCaller
           ? "verify_jwt is off, but the code checks the caller or a signature. Worth a read to confirm."
-          : "verify_jwt is off and the code doesn't check who's calling, so anyone on the internet can run it.",
+          : shared
+            ? `verify_jwt is off, but code it imports (${shared.path}) checks a key or the caller. Worth a read to confirm every route uses it.`
+            : "verify_jwt is off and the code doesn't check who's calling, so anyone on the internet can run it.",
       });
     }
   }
   return findings;
+}
+
+// Reading a key, token or signature, or the signed-in user, in code an edge function imports.
+const READS_KEY = /auth\.getUser|getClaims|jwtVerify|verifySignature|constructEvent|timingSafeEqual|standardwebhooks|new Webhook\(|svix|(?:headers\.get|req\.header)\(\s*["'`](?:authorization|apikey|x-api-key|[\w-]*(?:key|token|secret|signature))["'`]/i;
+
+const CHECK_NAME = /auth|key|token|secret|signature|verify|guard|require|protect|session|jwt/i;
+
+// The files these files import by relative path, four steps deep at most, each with the
+// names every import of it brings in ({ file, names }).
+function imported(files, start) {
+  const byPath = new Map(files.map((f) => [f.path, f]));
+  const found = new Map();
+  const seen = new Set(start.map((f) => f.path));
+  let wave = start;
+  for (let depth = 0; depth < 4 && wave.length && found.size < 300; depth++) {
+    const next = [];
+    for (const f of wave) {
+      const dir = f.path.split("/").slice(0, -1);
+      for (const m of f.text.matchAll(/\bimport\s+(type\s+)?([\w$*{},\s]+?)\s+from\s+["'](\.{1,2}\/[^"']+)["']|\bimport\(\s*["'](\.{1,2}\/[^"']+)["']\s*\)/g)) {
+        const parts = [...dir];
+        for (const p of (m[3] ?? m[4]).split("/")) p === ".." ? parts.pop() : p !== "." && parts.push(p);
+        const base = parts.join("/");
+        const hit = [base, `${base}.ts`, `${base}.js`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.js`].map((x) => byPath.get(x)).find(Boolean);
+        if (!hit) continue;
+        // Types check nothing: an "import type", or a "type X" in the braces, brings no names.
+        const names = m[1] ? [] : (m[2] ?? "").replace(/\b(as|type)\s+[\w$]+/g, "").split(/[^\w$]+/).filter(Boolean);
+        (found.get(hit.path) ?? found.set(hit.path, { file: hit, names: [] }).get(hit.path)).names.push(...names);
+        if (!seen.has(hit.path)) {
+          seen.add(hit.path);
+          next.push(hit);
+        }
+      }
+    }
+    wave = next;
+  }
+  return [...found.values()];
 }
 
 // The buckets supabase/config.toml declares, as [{ id, public }].

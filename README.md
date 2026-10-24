@@ -214,7 +214,7 @@ In Cursor, Windsurf, Claude Desktop or any other MCP client, add the server:
 ```json
 {
   "mcpServers": {
-    "rls-probe": { "command": "npx", "args": ["-y", "rls-probe@0.10.2", "mcp"] }
+    "rls-probe": { "command": "npx", "args": ["-y", "rls-probe@0.10.3", "mcp"] }
   }
 }
 ```
@@ -294,7 +294,9 @@ and still let one user edit another's rows. So this doesn't read them. It tries.
   it. Public buckets are flagged too.
 - **The code**: a service role key or `sb_secret_` key, or other secret keys, in
   front-end files or a build, `VITE_`/`NEXT_PUBLIC_` variables holding secrets,
-  and edge functions with `verify_jwt = false` that don't check who's calling.
+  and edge functions with `verify_jwt = false` that don't check who's calling, in
+  their own code or in a check they import by name from shared code (`requireKey`,
+  `AuthMiddleware`).
 
 ## Supabase's 2026 grants change
 
@@ -438,7 +440,7 @@ files each), every run finishes, most in 2 to 4 seconds. Testing the fixes as we
 (`--test-fixes`, `--prompt`, `--fix-policies`) takes 2 to 19 seconds, 4 for the median
 app. On the largest (402 tables) it stops after three minutes, by which time 364 of its
 376 fixes are verified and the rest are marked untested. Of the 348 fixes proposed for
-the other 24 apps, 346 passed (0.10.2).
+the other 24 apps, 346 passed (0.10.3).
 
 ## Limits
 
@@ -467,7 +469,9 @@ the other 24 apps, 346 passed (0.10.2).
 - By default it gives `anon`, `authenticated` and `service_role` every table in
   `public`, as Supabase projects have done. For a project created since May 30,
   2026, use `--grants=explicit`, or the report can show more than the API would
-  let through.
+  let through. A `pg_dump` among the migrations brings its project's own default
+  privileges, which replace these for what it lists (a project that took `anon` out
+  of the defaults for functions locks one with `revoke ... from public`).
 - A finding is a place to look. Some tables are meant to be public; the report
   says so where it can't tell.
 

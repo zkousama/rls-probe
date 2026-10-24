@@ -642,6 +642,73 @@ end $$;
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+// pg_dump writes auth.uid() as "auth"."uid"(); a function that checks its caller that way
+// still checks its caller.
+test("a caller check written with quotes, as pg_dump writes it, counts", async () => {
+  const { runProbe } = await import("../src/engine.js");
+  const { baseSnapshot } = await import("../src/snapshot.js");
+  const snapshot = await baseSnapshot();
+  const sql = `create table public.orders (id uuid primary key default gen_random_uuid(), user_id uuid not null references auth.users (id), total int);
+alter table public.orders enable row level security;
+create policy "own orders" on public.orders to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
+CREATE FUNCTION "public"."close_account"() RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET "search_path" TO '' AS $$
+DECLARE v uuid;
+BEGIN
+  SELECT "auth"."uid"() INTO v;
+  IF v IS NULL THEN RAISE EXCEPTION 'not_authenticated'; END IF;
+  DELETE FROM "public"."orders" WHERE "user_id" = v;
+END $$;
+REVOKE ALL ON FUNCTION "public"."close_account"() FROM PUBLIC, anon;
+GRANT ALL ON FUNCTION "public"."close_account"() TO "authenticated";
+`;
+  const report = await runProbe({ migrations: [{ name: "20250101000000_app.sql", sql }], snapshot });
+  const f = report.findings.find((x) => x.kind === "definer-function");
+  assert.equal(f?.severity ?? "review", "review");
+});
+
+// A pg_dump of a project ends with that project's default privileges, the whole list: one
+// that took anon and authenticated out of the defaults for functions locks a function with
+// "revoke ... from public" alone. The same lines in an ordinary migration only add a grant.
+test("a pg_dump's default privileges replace the platform's", async () => {
+  const { runProbe } = await import("../src/engine.js");
+  const { baseSnapshot } = await import("../src/snapshot.js");
+  const snapshot = await baseSnapshot();
+  const app = `CREATE TABLE "public"."orders" ("id" uuid DEFAULT gen_random_uuid() PRIMARY KEY, "user_id" uuid NOT NULL REFERENCES auth.users (id), "total" int);
+ALTER TABLE "public"."orders" ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "own orders" ON "public"."orders" TO "authenticated" USING ("user_id" = auth.uid()) WITH CHECK ("user_id" = auth.uid());
+CREATE FUNCTION "public"."wipe_orders"("p_user" uuid) RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN DELETE FROM public.orders WHERE user_id = p_user; END $$;
+REVOKE ALL ON FUNCTION "public"."wipe_orders"("p_user" uuid) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."wipe_orders"("p_user" uuid) TO "service_role";
+GRANT ALL ON TABLE "public"."orders" TO "anon";
+GRANT ALL ON TABLE "public"."orders" TO "authenticated";
+GRANT ALL ON TABLE "public"."orders" TO "service_role";
+ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON FUNCTIONS TO "postgres";
+ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON FUNCTIONS TO "service_role";
+`;
+  const header = "SET statement_timeout = 0;\nSELECT pg_catalog.set_config('search_path', '', false);\nSET check_function_bodies = false;\n";
+  const callable = async (sql) => (await runProbe({ migrations: [{ name: "20250101000000_app.sql", sql }], snapshot })).findings.some((f) => f.kind === "definer-function");
+  assert.equal(await callable(header + app), false, "the dump's defaults leave anon out, so revoking from public locks it");
+  assert.equal(await callable(app), true, "on Supabase's defaults, anon keeps its own grant");
+});
+
+// An edge function's check is often in shared code it imports (a key middleware in
+// supabase/functions/_shared). A header named in a CORS list isn't a check.
+test("edge functions that check keys in code they import aren't open", async () => {
+  const { scanCode } = await import("../src/static.js");
+  const found = scanCode([
+    { path: "supabase/config.toml", text: "[functions.keys]\nverify_jwt = false\n\n[functions.open]\nverify_jwt = false\n" },
+    { path: "supabase/functions/keys/index.ts", text: "import { app } from '../_shared/routes/keys.ts'\nDeno.serve(app.fetch)\n" },
+    { path: "supabase/functions/_shared/routes/keys.ts", text: "import { requireKey } from '../middleware.ts'\nimport { cors } from '../cors.ts'\nexport const app = new Hono().use(cors).get('/', requireKey, (c) => c.json([]))\n" },
+    { path: "supabase/functions/_shared/middleware.ts", text: "export const requireKey = async (c, next) => {\n  const key = c.req.header('capgkey') ?? c.req.header('authorization')\n  if (!(await valid(key))) return c.json({ error: 'invalid key' }, 401)\n  await next()\n}\n" },
+    { path: "supabase/functions/_shared/cors.ts", text: "export const cors = { allowHeaders: ['authorization', 'apikey', 'content-type'] }\n" },
+    { path: "supabase/functions/open/index.ts", text: "import { cors } from '../_shared/cors.ts'\nimport { createApp } from '../_shared/app.ts'\nDeno.serve(createApp(() => new Response('ok', { headers: cors })))\n" },
+    // Every function's plumbing: it reads a key for something, but using it isn't a check.
+    { path: "supabase/functions/_shared/app.ts", text: "export const createApp = (handler) => (req) => { log(req.headers.get('authorization') ? 'with key' : 'no key'); return handler(req) }\n" },
+  ]);
+  const sev = Object.fromEntries(found.filter((f) => f.kind === "open-function").map((f) => [f.function, f.severity]));
+  assert.deepEqual(sev, { keys: "review", open: "high" });
+});
+
 // What a key looks like isn't a key: another service's sk- key, a placeholder, code that
 // strips a PEM header, an example env file. A real OpenAI key and a real private key are.
 test("look-alike keys aren't reported; real ones are", async () => {

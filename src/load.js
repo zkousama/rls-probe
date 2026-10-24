@@ -50,6 +50,7 @@ export async function loadDatabase(migrations, { grants = "legacy", snapshot, fr
   const failed = [];
   let applied = 0;
   for (const { file: name, statements: list } of statements) {
+    await db.exec(dumpDefaults(migrations.find((m) => m.name === name)?.sql ?? "")).catch(() => {});
     for (let statement of list) {
       const reason = skipReason(statement, available);
       if (reason) {
@@ -73,6 +74,20 @@ export async function loadDatabase(migrations, { grants = "legacy", snapshot, fr
   const exists = new Set((await db.query(`select relname from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public'`)).rows.map((r) => r.relname));
   const missing = [...new Set(failed.map((f) => /relation "(?:public\.)?([^".]+)" does not exist/.exec(f.error)?.[1]).filter((t) => t && !exists.has(t)))].sort();
   return { db, applied, skipped, failed, missing, extensions: [...wanted] };
+}
+
+// A pg_dump of a project restores each object's own grants and ends with the project's
+// default privileges, the whole list for each kind it names (ALTER DEFAULT PRIVILEGES FOR
+// ROLE "postgres" IN SCHEMA "public" GRANT ALL ON FUNCTIONS TO "service_role"). A project
+// may have taken anon and authenticated out of them, so for those kinds the platform's
+// defaults are dropped before the dump runs, and it grants back what it lists. The same
+// lines in an ordinary migration only add a grant, so they need the dump's header too.
+const DUMP = /^SELECT pg_catalog\.set_config\('search_path', '', false\);|^SET check_function_bodies = false;/m;
+const DUMP_DEFAULTS = /ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT [^;]+ ON (TABLES|SEQUENCES|FUNCTIONS) TO/gi;
+function dumpDefaults(sql) {
+  if (!DUMP.test(sql)) return "";
+  const kinds = new Set([...sql.matchAll(DUMP_DEFAULTS)].map((m) => m[1].toLowerCase()));
+  return [...kinds].map((k) => `alter default privileges in schema public revoke all on ${k} from anon, authenticated, service_role;`).join("\n");
 }
 
 // The PGlite modules for the extensions named, by their `create extension` name,

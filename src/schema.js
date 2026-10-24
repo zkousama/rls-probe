@@ -110,7 +110,8 @@ export async function readFunctions(db) {
 // auth.jwt(), auth.role() or the request's JWT claims, directly or through such a helper
 // (private.require_user(), util.assert_company_access() and the like), up to three calls
 // deep. Returns their names, bare and schema-qualified.
-export const CHECKS_CALLER = /auth\.(uid|jwt|role)\s*\(|request\.jwt\.claim|current_setting\s*\(\s*'(request\.jwt|role)'?/i;
+// pg_dump quotes them: "auth"."uid"().
+export const CHECKS_CALLER = /"?auth"?\."?(uid|jwt|role)"?\s*\(|request\.jwt\.claim|current_setting\s*\(\s*'(request\.jwt|role)'?/i;
 export async function readGuards(db) {
   const all = (await db.query(`
     select n.nspname as schema, p.proname as name, pg_get_functiondef(p.oid) as body
