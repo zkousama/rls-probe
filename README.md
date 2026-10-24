@@ -214,7 +214,7 @@ In Cursor, Windsurf, Claude Desktop or any other MCP client, add the server:
 ```json
 {
   "mcpServers": {
-    "rls-probe": { "command": "npx", "args": ["-y", "rls-probe@0.10.3", "mcp"] }
+    "rls-probe": { "command": "npx", "args": ["-y", "rls-probe@0.10.4", "mcp"] }
   }
 }
 ```
@@ -282,8 +282,10 @@ and still let one user edit another's rows. So this doesn't read them. It tries.
   "rls-probe tried it, and the test user's row in orders was deleted". A function
   that reads a secret from Supabase Vault by name gets a stand-in secret under that
   name for the call, so one that hands it out is caught the same way. A function
-  that only bumps a counter, or that checks `auth.uid()` and changes nothing, is
-  marked as worth a look rather than as a problem.
+  that only bumps a counter, that checks `auth.uid()`, or that rls-probe called on
+  another user's rows and saw change nothing, is marked as worth a look rather than
+  as a problem; one it couldn't call (an argument type it can't fill) is medium, since
+  nobody has checked what it does.
 - **Teammates**, when the app has groups (organization, team or workspace members):
   a third user joins the first user's group with the plainest role, and what they
   can see and change is shown, not graded, since sharing with teammates is usually
@@ -440,7 +442,7 @@ files each), every run finishes, most in 2 to 4 seconds. Testing the fixes as we
 (`--test-fixes`, `--prompt`, `--fix-policies`) takes 2 to 19 seconds, 4 for the median
 app. On the largest (402 tables) it stops after three minutes, by which time 364 of its
 376 fixes are verified and the rest are marked untested. Of the 348 fixes proposed for
-the other 24 apps, 346 passed (0.10.3).
+the other 24 apps, 346 passed (0.10.4).
 
 ## Limits
 
@@ -473,7 +475,10 @@ the other 24 apps, 346 passed (0.10.3).
   privileges, which replace these for what it lists (a project that took `anon` out
   of the defaults for functions locks one with `revoke ... from public`).
 - A finding is a place to look. Some tables are meant to be public; the report
-  says so where it can't tell.
+  says so where it can't tell. Each finding says how rls-probe knows: it tried it
+  in the database, or read it in the code and settings (keys in the code, edge
+  functions, functions it couldn't call). One that's wrong can be reported from the
+  page in a click, with its id and nothing else from your app.
 
 ## Tests
 

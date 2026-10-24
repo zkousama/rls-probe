@@ -16,6 +16,14 @@ const MAX_CODE_FILES = 800;
 const MAX_FILE_BYTES = 2_000_000;
 const SAMPLE = "https://github.com/zkousama/rls-probe/tree/main/test/fixtures/leaky";
 const HIRE = "https://byousama.pages.dev/#contact";
+// How rls-probe knows each finding, and where to say it's wrong: a public GitHub issue,
+// filled in with the finding and nothing else from the app.
+const EVIDENCE = { tried: "rls-probe tried it", read: "From reading your code" };
+function wrongLink(item) {
+  const body = [`rls-probe ${VERSION} said:`, "", `> ${item.headline}`, "", `Finding: \`${item.id}\` (${EVIDENCE[item.evidence].toLowerCase()})`, "",
+    "What is it actually for, or why is this wrong?", "", "", "(This issue is public: leave out keys, passwords and anything private.)"].join("\n");
+  return `https://github.com/zkousama/rls-probe/issues/new?title=${encodeURIComponent(`Wrong finding: ${item.id}`)}&body=${encodeURIComponent(body)}`;
+}
 
 // A problem with what was given, said to the person, as opposed to a bug.
 class Problem extends Error {}
@@ -406,6 +414,8 @@ function show(report, project, testing) {
     ? [el("p", { className: `said said-${{ mistake: "mistake", "on purpose": "purpose", unclear: "unclear" }[item.intent.verdict]}` },
       el("span", { className: "said-tag" }, INTENT[item.intent.verdict]), " ", capitalize(item.intent.reasons[0].replace(/[^.?!]$/, "$&.")))]
     : [];
+  const how = (item) => el("p", { className: "evidence" }, el("span", { className: `ev ev-${item.evidence}` }, EVIDENCE[item.evidence]), " · ",
+    el("a", { href: wrongLink(item), target: "_blank", rel: "noopener" }, "Wrong? Tell me"));
   const unclear = [...e.problems, ...e.notes].some((i) => i.intent?.verdict === "unclear");
   const hire = unclear ? [el("p", { className: "hire-note" }, "rls-probe can't tell what some of these are meant to be from your code alone. A person reading your code can settle them. ",
     el("a", { href: HIRE, className: "font-semibold text-ink underline decoration-2 underline-offset-4" }, "Hire me"), ".")] : [];
@@ -416,6 +426,7 @@ function show(report, project, testing) {
       el("span", { className: `sev sev-${p.severity}` }, SEVERITY[p.severity]),
       el("div", {},
         el("p", { className: "font-semibold" }, p.headline),
+        how(p),
         ...said(p),
         el("details", { className: "mt-1.5" }, el("summary", {}, "What to change"), el("p", { className: "ask" }, p.ask), slot(p)),
       ),
@@ -441,7 +452,7 @@ function show(report, project, testing) {
   if (e.notes.length) {
     sections.push(section("Worth checking", "Fine if they're on purpose.", el("div", {}, ...e.notes.map((n) => el("div", { className: "finding" },
       el("span", { className: "sev sev-review" }, "Check"),
-      el("div", {}, el("p", {}, n.headline), ...said(n), el("details", { className: "mt-1.5" }, el("summary", {}, "If it isn't on purpose"), el("p", { className: "ask" }, n.ask), slot(n))),
+      el("div", {}, el("p", {}, n.headline), how(n), ...said(n), el("details", { className: "mt-1.5" }, el("summary", {}, "If it isn't on purpose"), el("p", { className: "ask" }, n.ask), slot(n))),
     ))), ...(e.problems.length ? [] : hire)));
   }
   // What each table is meant to allow: drafted from the code, answered here, checked at once.

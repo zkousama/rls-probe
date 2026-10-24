@@ -51,12 +51,12 @@ export function scanCode(files) {
       for (const jwt of line.match(/eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g) ?? []) {
         const { role, iss } = jwtClaims(jwt);
         if (role === "service_role" && iss !== "supabase-demo") {
-          findings.push({ kind: "service-key", key: "service_role", test, severity: test ? "review" : "critical", where: `${rel}:${i + 1}`, title: "Supabase service role key in the code", detail: `${mask(jwt)} skips every access rule. ${test ? "It's in a test file, so probably made up; if it's real, anyone who reads the repository can copy it." : "Anyone who opens the site can copy it."}` });
+          findings.push({ kind: "service-key", evidence: "read", key: "service_role", test, severity: test ? "review" : "critical", where: `${rel}:${i + 1}`, title: "Supabase service role key in the code", detail: `${mask(jwt)} skips every access rule. ${test ? "It's in a test file, so probably made up; if it's real, anyone who reads the repository can copy it." : "Anyone who opens the site can copy it."}` });
         }
       }
       // Supabase's newer secret keys aren't JWTs: sb_secret_ and a random string.
       for (const hit of (line.match(/\bsb_secret_[A-Za-z0-9_-]{20,}/g) ?? []).filter((k) => k !== LOCAL_SECRET)) {
-        findings.push({ kind: "service-key", key: "secret", test, severity: test ? "review" : "critical", where: `${rel}:${i + 1}`, title: "Supabase secret key in the code", detail: `${mask(hit)} skips every access rule. ${test ? "It's in a test file, so probably made up; if it's real, anyone who reads the repository can copy it." : "Anyone who opens the site can copy it."}` });
+        findings.push({ kind: "service-key", evidence: "read", key: "secret", test, severity: test ? "review" : "critical", where: `${rel}:${i + 1}`, title: "Supabase secret key in the code", detail: `${mask(hit)} skips every access rule. ${test ? "It's in a test file, so probably made up; if it's real, anyone who reads the repository can copy it." : "Anyone who opens the site can copy it."}` });
       }
       // A form field's placeholder shows what a key looks like, not a key.
       if (/placeholder/i.test(line)) return;
@@ -66,7 +66,7 @@ export function scanCode(files) {
         for (const hit of (nextLine ? `${line}\n${lines[i + 1] ?? ""}` : line).match(re) ?? []) {
           if (/^\.env/.test(name) && what.startsWith("secret in a variable")) continue;
           const browserVar = what.startsWith("secret in a variable");
-          findings.push({ kind: browserVar ? "browser-secret" : "secret", ...(browserVar ? { variable: hit } : {}), test, severity: test ? "review" : browserVar ? "high" : "critical", where: `${rel}:${i + 1}`, title: what, detail: mask(hit) });
+          findings.push({ kind: browserVar ? "browser-secret" : "secret", evidence: "read", ...(browserVar ? { variable: hit } : {}), test, severity: test ? "review" : browserVar ? "high" : "critical", where: `${rel}:${i + 1}`, title: what, detail: mask(hit) });
         }
       }
     });
@@ -90,7 +90,7 @@ function scanFunctions(files) {
       const source = code.map((f) => f.text).join("\n");
       // Configured, but its code isn't in the repository: nothing to judge.
       if (!code.length) {
-        findings.push({ kind: "open-function", function: current, missing: true, severity: "review", where: `supabase/functions/${current}`, title: "Edge function open to anyone",
+        findings.push({ kind: "open-function", evidence: "read", function: current, missing: true, severity: "review", where: `supabase/functions/${current}`, title: "Edge function open to anyone",
           detail: "verify_jwt is off, and its code isn't in the repository, so rls-probe can't tell whether it checks the caller or a signature." });
         continue;
       }
@@ -103,6 +103,7 @@ function scanFunctions(files) {
       const shared = checksCaller ? null : imported(files, code).find((x) => x.names.some((n) => CHECK_NAME.test(n)) && READS_KEY.test(x.file.text))?.file;
       findings.push({
         kind: "open-function",
+        evidence: "read",
         function: current,
         severity: checksCaller || shared ? "review" : "high",
         where: `supabase/functions/${current}`,

@@ -130,11 +130,11 @@ export function applyAccess(report, entries) {
       const where = name.replace(/^(bucket|function):/, "");
       const already = [...covered].some((c) => c.startsWith(`${name} `) && c.includes(verb));
       if (status === "too open" && !already) {
-        findings.push({ kind: "access-too-open", verb, where: name, severity: "high", declared: level, observed: now, title: "Allows more than rls-probe.json says",
+        findings.push({ kind: "access-too-open", evidence: "tried", verb, where: name, severity: "high", declared: level, observed: now, title: "Allows more than rls-probe.json says",
           detail: `rls-probe.json says ${describeLevel(level, name)} may ${doing([verb], name)}, but ${describeLevel(now, name)} can.` });
       }
       if (status === "too closed") {
-        findings.push({ kind: "access-too-closed", verb, where: name, severity: "review", declared: level, observed: now, title: "Allows less than rls-probe.json says",
+        findings.push({ kind: "access-too-closed", evidence: "tried", verb, where: name, severity: "review", declared: level, observed: now, title: "Allows less than rls-probe.json says",
           detail: `rls-probe.json says ${describeLevel(level, name)} may ${doing([verb], name)}, but ${describeFewer(now, name)} can, so that part of the app may not work.` });
       }
     }

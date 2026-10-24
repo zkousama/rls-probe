@@ -12,7 +12,8 @@ const LABEL = { critical: "CRITICAL", high: "HIGH", medium: "MEDIUM", review: "C
 export const INTENT = { mistake: "Likely a mistake", "on purpose": "Likely on purpose", unclear: "Can't tell from the code" };
 
 export function explain(report) {
-  const items = report.findings.map((f) => ({ id: findingId(f), severity: f.severity, kind: f.kind, where: f.where, ...say(f, report), selfFix: selfFix(f, report), intent: f.intent }));
+  // How rls-probe knows: it tried it in the database, or read it in the code and settings.
+  const items = report.findings.map((f) => ({ id: findingId(f), severity: f.severity, kind: f.kind, where: f.where, ...say(f, report), selfFix: selfFix(f, report), intent: f.intent, evidence: f.evidence ?? "tried" }));
   const g = report.grantsChange;
   return {
     grade: grade(report),
@@ -88,13 +89,13 @@ export function renderPlain(report) {
   const e = explain(report);
   const out = [`rls-probe: ${e.grade ? `grade ${e.grade}. ` : ""}${capitalize(e.verdict)}`, ""];
   for (const p of e.problems) {
-    out.push(`  ${LABEL[p.severity].padEnd(8)}  ${p.headline}`);
+    out.push(`  ${LABEL[p.severity].padEnd(8)}  ${p.headline}${p.evidence === "read" ? " (From reading the code.)" : ""}`);
     if (p.intent) out.push(`            ${INTENT[p.intent.verdict]}: ${p.intent.reasons[0].replace(/[^.?!]$/, "$&.")}`);
   }
   if (e.problems.length) out.push("");
   if (e.notes.length) {
     out.push("Worth a look, and fine if it's on purpose:");
-    for (const n of e.notes) out.push(`  - ${n.headline}`);
+    for (const n of e.notes) out.push(`  - ${n.headline}${n.evidence === "read" ? " (From reading the code.)" : ""}`);
     out.push("");
   }
   if (e.grants) out.push(e.grants.headline, "");
@@ -110,6 +111,7 @@ export function renderPlain(report) {
   if (e.problems.length || e.grants?.lines.length) out.push("To fix them with Lovable or Bolt: run rls-probe with --prompt and paste what it prints.", "");
   if (e.problems.length || e.notes.length) out.push("To have an agent that reads your code (Claude Code, Cursor, Codex) check each one and fix the real ones: run it with --review and paste what it prints.", "");
   if (e.problems.length) out.push("To write the fixes that pass rls-probe's own test as a migration: run it with --fix-policies.", "");
+  if (e.problems.length || e.notes.length) out.push("A finding that's wrong? Tell me, with its id from the details: https://github.com/zkousama/rls-probe/issues", "");
   return out.join("\n");
 }
 

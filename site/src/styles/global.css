@@ -216,6 +216,12 @@
 
   .share-preview { display: block; width: 100%; max-width: 720px; height: auto; border: 1px solid var(--color-rule); border-radius: 6px; }
 
+  /* How rls-probe knows a finding, and the link to say it's wrong. */
+  .evidence { margin-top: 2px; font-size: 0.8rem; color: var(--color-muted); }
+  .evidence .ev-read { font-style: italic; }
+  .evidence a { color: var(--color-muted); text-decoration: underline; text-underline-offset: 3px; }
+  .evidence a:hover { color: var(--color-ink); }
+
   /* Declared access: a question, and its answers as one row of choices. */
   .question { padding: 14px 16px; border: 1px solid var(--color-rule); border-radius: 6px; background: var(--color-paper); }
   .question.answered { border-color: var(--color-pass); }

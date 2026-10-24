@@ -98,8 +98,10 @@ export function findingsFrom(results, views, functions, buckets, storage, guards
     const caller = who === "anon" ? "visitors who aren't signed in" : "any signed-in user";
     findings.push({ kind: "definer-function", function: f.name, callers: who === "anon" ? "anyone" : "users", writes, proof, leak: Boolean(leak), tried, checks,
       ...(secret ? { secrets: f.calls[secret].secrets } : {}),
+      // Called at all, or only read in its definition.
+      evidence: calls.length ? "tried" : "read",
       counter: counted ? { table: f.calls[counted].changed[0].table, columns: f.calls[counted].changed.flatMap((c) => c.columns) } : null,
-      refusal, severity: by ? (destroys ? (by === "anon" ? "critical" : "high") : by === "anon" ? "high" : "medium") : secret ? (secret === "anon" ? "critical" : "high") : leak ? "high" : counted || refusal || checks || !writes ? "review" : "high", where: `${f.name}(${f.args})`, title: "Function runs with full rights and anyone can call it",
+      refusal, severity: by ? (destroys ? (by === "anon" ? "critical" : "high") : by === "anon" ? "high" : "medium") : secret ? (secret === "anon" ? "critical" : "high") : leak ? "high" : counted || refusal || checks || !writes || tried ? "review" : "medium", where: `${f.name}(${f.args})`, title: "Function runs with full rights and anyone can call it",
       detail: secret
         ? `It's security definer, so it skips row-level security. Called by ${secret === "anon" ? "a visitor" : "a signed-in user"}, it returned the secret ${f.calls[secret].secrets.map((n) => `"${n}"`).join(" and ")} from Supabase Vault.`
         : proof
@@ -110,7 +112,7 @@ export function findingsFrom(results, views, functions, buckets, storage, guards
             ? `It's security definer, and ${caller} can call it. Called${aimed}, it only changed ${f.calls[counted].changed.flatMap((c) => c.columns).join(", ")} on user A's rows, which looks like a counter. Check that's all it's meant to do.`
             : refusal
             ? `It's security definer, and ${caller} can call it, but when rls-probe did, it refused: "${refusal.slice(0, 160)}". It seems to check the caller itself.`
-            : `It's security definer, so it skips row-level security, and ${caller} can call it${checks ? "." : ". It never checks auth.uid()."}${writes ? "" : " It only reads, but it can still reveal data the tables would hide."}${tried ? ` rls-probe called it${aimed}, and nothing of user A's changed or came back; other arguments may still reach them.` : ""}`,
+            : `It's security definer, so it skips row-level security, and ${caller} can call it${checks ? "." : ". It never checks auth.uid()."}${writes ? "" : " It only reads, but it can still reveal data the tables would hide."}${tried ? ` rls-probe called it${aimed}, and nothing of user A's changed or came back; other arguments may still reach them.` : ""}${!calls.length && f.untested ? ` rls-probe couldn't call it (${f.untested}), so nobody has checked what it does.` : ""}`,
       fix: `revoke execute on function public.${f.name}(${f.args}) from public, anon, authenticated; (Postgres lets public run every function unless revoked) or check auth.uid() inside it.` });
   }
   // Files: what a visitor and another user managed to do in user A's folder.
@@ -145,7 +147,7 @@ export function findingsFrom(results, views, functions, buckets, storage, guards
     }
   }
   for (const b of buckets) {
-    if (b.public) findings.push({ kind: "public-bucket", bucket: b.id, severity: "review", where: `storage bucket ${b.id}`, title: "Public storage bucket",
+    if (b.public) findings.push({ kind: "public-bucket", evidence: "read", bucket: b.id, severity: "review", where: `storage bucket ${b.id}`, title: "Public storage bucket",
       detail: "Every file in it can be downloaded by anyone who has or guesses its path.", fix: "Fine for avatars and product photos. For anything private, make the bucket private and use signed URLs." });
   }
   return findings.sort((a, b) => ORDER[a.severity] - ORDER[b.severity]);

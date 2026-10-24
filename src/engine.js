@@ -48,6 +48,8 @@ export async function runProbe({ migrations, code = [], grants = "legacy", oct30
   const policies = await readPolicies(load.db);
   const accept = readAccept(config);
   const { findings, accepted, unused } = applyAccept([...findingsFrom(results, views, functions, buckets, storage, guards), ...scanCode(code)], accept.entries);
+  // How rls-probe knows: "tried" in the database, unless it only "read" the code or settings.
+  for (const f of [...findings, ...accepted]) f.evidence ??= "tried";
   findings.sort((a, b) => ORDER[a.severity] - ORDER[b.severity]);
 
   // How each owned table's rows lead to a user, for fixes that name the column.

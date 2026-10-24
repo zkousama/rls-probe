@@ -709,6 +709,44 @@ test("edge functions that check keys in code they import aren't open", async () 
   assert.deepEqual(sev, { keys: "review", open: "high" });
 });
 
+// How sure a finding is decides how loud it is. A function anyone can call that rls-probe
+// called, aimed at another user's rows, and saw do nothing is worth a look; one it couldn't
+// call is medium, since nobody has checked it; one that did harm stays critical. Each
+// finding says whether rls-probe tried it or read it in the code.
+test("functions are as loud as what rls-probe saw them do, and every finding says how it knows", async () => {
+  const { runProbe } = await import("../src/engine.js");
+  const { baseSnapshot } = await import("../src/snapshot.js");
+  const snapshot = await baseSnapshot();
+  const sql = `create table public.notes (id uuid primary key default gen_random_uuid(), user_id uuid not null references auth.users (id), body text);
+alter table public.notes enable row level security;
+create policy "own notes" on public.notes for all to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
+create table public.tags (id bigint generated always as identity primary key, name text);
+create type public.span as (lo int, hi int);
+create function public.touch_note(p_id uuid) returns void language plpgsql security definer as $$
+begin
+  update public.notes set body = body where id = p_id and false;
+end $$;
+create function public.wipe_notes(p_user uuid) returns void language plpgsql security definer as $$
+begin
+  delete from public.notes where user_id = p_user;
+end $$;
+create function public.resize(p_span public.span) returns void language plpgsql security definer as $$
+begin
+  update public.notes set body = null where length(body) between (p_span).lo and (p_span).hi;
+end $$;
+`;
+  const report = await runProbe({ migrations: [{ name: "20250101000000_app.sql", sql }], snapshot, code: [{ path: "src/admin.ts", text: 'const key = "' + ["sb", "secret", "Q".repeat(40)].join("_") + '";' }] });
+  const fn = (name) => report.findings.find((f) => f.kind === "definer-function" && f.function === name);
+  assert.equal(fn("touch_note").severity, "review", "called on another user's row, it changed nothing");
+  assert.equal(fn("wipe_notes").severity, "critical", "called as a visitor, it deleted another user's notes");
+  assert.equal(fn("resize").severity, "medium", "it takes an argument rls-probe can't fill, so nobody has checked it");
+  const how = Object.fromEntries(explain(report).problems.concat(explain(report).notes).map((i) => [i.id, i.evidence]));
+  assert.equal(how["rls-off:tags"], "tried");
+  assert.equal(how["definer-function:wipe_notes(p_user uuid)"], "tried");
+  assert.equal(how["definer-function:resize(p_span span)"], "read");
+  assert.equal(Object.entries(how).find(([id]) => id.startsWith("service-key"))?.[1], "read");
+});
+
 // What a key looks like isn't a key: another service's sk- key, a placeholder, code that
 // strips a PEM header, an example env file. A real OpenAI key and a real private key are.
 test("look-alike keys aren't reported; real ones are", async () => {
