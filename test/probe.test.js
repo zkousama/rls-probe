@@ -780,6 +780,34 @@ create view public.category_list as select name from public.categories;
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+// A view on a view is judged by the tables at the bottom, and by every view on the way:
+// one that runs as its owner anywhere in the chain shows every row. A view that reads a
+// table the API never shows (auth.users) runs as its owner to show it, so it's held back.
+test("views on views and views on auth.users get the right grants, or are held back", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rls-probe-nested-views-"));
+  fs.mkdirSync(path.join(dir, "supabase", "migrations"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "supabase", "migrations", "20250101000000_app.sql"), `
+create table public.notes (id uuid primary key default gen_random_uuid(), user_id uuid not null references auth.users (id), title text);
+alter table public.notes enable row level security;
+create policy "own notes" on public.notes for all to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
+create table public.profiles (id uuid primary key references auth.users (id), name text);
+alter table public.profiles enable row level security;
+create policy "anyone reads profiles" on public.profiles for select using (true);
+create view public.my_notes with (security_invoker = true) as select id, user_id, title from public.notes;
+create view public.my_note_titles with (security_invoker = true) as select title from public.my_notes;
+create view public.note_stats as select user_id, count(*) as n from public.notes group by user_id;
+create view public.stats_board with (security_invoker = true) as select n from public.note_stats;
+create view public.profile_cards as select p.id, p.name, u.email from public.profiles p join auth.users u on u.id = p.id;
+`);
+  const g = runWith(dir, "--oct30").grantsChange;
+  const safe = g.breaks.flatMap((b) => b.grant);
+  const held = Object.fromEntries(g.unsafe.map((u) => [u.table, u.problems.join(" ")]));
+  assert.ok(safe.includes("grant select on public.my_note_titles to authenticated;"), "both views follow the notes policies");
+  assert.match(held.stats_board ?? "", /note_stats runs as its owner/, "the view under it shows every row of notes");
+  assert.match(held.profile_cards ?? "", /auth\.users/, "it shows users' emails from auth.users");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 // What a key looks like isn't a key: another service's sk- key, a placeholder, code that
 // strips a PEM header, an example env file. A real OpenAI key and a real private key are.
 test("look-alike keys aren't reported; real ones are", async () => {

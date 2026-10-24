@@ -214,7 +214,7 @@ In Cursor, Windsurf, Claude Desktop or any other MCP client, add the server:
 ```json
 {
   "mcpServers": {
-    "rls-probe": { "command": "npx", "args": ["-y", "rls-probe@0.10.5", "mcp"] }
+    "rls-probe": { "command": "npx", "args": ["-y", "rls-probe@0.10.6", "mcp"] }
   }
 }
 ```
@@ -356,6 +356,8 @@ Views lose their grants the same way. A view that follows the tables' rules
 (`security_invoker`) is as safe to grant as the tables under it; one that runs as its
 owner, or a materialized view, shows every row it selects, so it's held back unless
 those tables hide nothing from that role, with the `alter view` that makes it safe.
+A view on a view is judged by the tables at the bottom and every view on the way, and
+one that shows a table the API never does (`auth.users`) is held back.
 `--fix` writes them as a new migration next to the others, with the tables it
 held back listed as comments, so the change is a file to read and commit.
 `--grants=explicit` runs the whole probe as a project without the old grants.
@@ -414,6 +416,12 @@ on a local Supabase opted in with the SQL from Supabase's changelog: every table
 refuses before the suggested grants, and after them each user can create, read
 and edit their own rows while a visitor and a second user reach nothing they
 shouldn't. 30 of 30 checks pass on `test/fixtures/new-grants`.
+`scripts/compare-view-grants-with-supabase.mjs` does the same for views, with
+`test/fixtures/view-grants.sql` added: every view refuses users and the service key
+before the grants; after them, a view that follows the tables' rules, and a view on it,
+show each user only their own rows, the service key reads every view, and the view
+rls-probe held back still refuses users. 18 of 18 pass (0.10.6). Granted anyway, that
+view showed a new user every other user's totals.
 
 `scripts/verify-oct30-on-supabase.mjs` does it for any app: it applies only the
 grants marked safe, checks through the API that those tables answer and the
@@ -446,7 +454,7 @@ files each), every run finishes, most in 2 to 4 seconds. Testing the fixes as we
 (`--test-fixes`, `--prompt`, `--fix-policies`) takes 2 to 19 seconds, 4 for the median
 app. On the largest (402 tables) it stops after three minutes, by which time 364 of its
 376 fixes are verified and the rest are marked untested. Of the 348 fixes proposed for
-the other 24 apps, 346 passed (0.10.5).
+the other 24 apps, 346 passed (0.10.6).
 
 ## Limits
 

@@ -1,7 +1,7 @@
 ---
 name: supabase-security
 description: Check a Supabase app's database security with rls-probe and fix what it finds. Use after creating or changing anything in supabase/migrations, before deploying, when asked whether a Supabase, Lovable or Bolt app is secure, or when the app gets "permission denied" (42501) after Supabase's October 2026 grants change.
-allowed-tools: Bash(npx -y rls-probe@0.10.5 *)
+allowed-tools: Bash(npx -y rls-probe@0.10.6 *)
 ---
 
 # Checking a Supabase app with rls-probe
@@ -16,7 +16,7 @@ functions.
 Use the `check_supabase_security` tool from this plugin's MCP server. Without it, run:
 
 ```sh
-npx -y rls-probe@0.10.5 <app folder> --oct30
+npx -y rls-probe@0.10.6 <app folder> --oct30
 ```
 
 The app folder is the one holding `supabase/migrations` (usually the project root).
@@ -26,7 +26,7 @@ to check (no migrations, or no tables in them).
 ## Fix
 
 - rls-probe only sees the database the migrations build. Check each finding against the
-  code before changing anything: `npx -y rls-probe@0.10.5 <app folder> --review` gives,
+  code before changing anything: `npx -y rls-probe@0.10.6 <app folder> --review` gives,
   for each one, what rls-probe saw, the migration lines behind it, a check to run on a
   local database, and why it might not apply. Decide whether it's real, already handled,
   on purpose or wrong.
@@ -34,12 +34,12 @@ to check (no migrations, or no tables in them).
   (`{ "accept": [{ "finding": "visitor-read:products", "reason": "a public catalog" }] }`),
   so they're listed as accepted instead of counted. Ask the user before accepting anything
   that holds private data.
-- To record who each table is for, run `npx -y rls-probe@0.10.5 <app folder> --draft-access`.
+- To record who each table is for, run `npx -y rls-probe@0.10.6 <app folder> --draft-access`.
   It writes an `access` section into `rls-probe.json` (who may see, add and change each
   table: everyone, signed-in, team, owner or server), drafted from the code, and keeps
   what's already there. Ask the user every question it marks with "?"; never answer
   those yourself. From then on, findings that match the answers stop counting.
-- Get the exact changes with `npx -y rls-probe@0.10.5 <app folder> --prompt`. It names
+- Get the exact changes with `npx -y rls-probe@0.10.6 <app folder> --prompt`. It names
   the app's own policies and owner columns, and gives SQL that rls-probe already
   tested on a copy of the database: prefer it. The `write_supabase_security_fixes`
   tool, or `--fix-policies`, writes all the tested fixes as one migration.

@@ -63,31 +63,70 @@ export async function grantsReport(explicitDb, findings) {
   // Views lose the old grants too. One that follows the tables' rules (security_invoker)
   // is as safe to grant as the tables under it. One that runs as its owner, or a
   // materialized view, shows every row it selects: safe only for a role those tables hide
-  // nothing from. A role is granted a view when it may read every table under it.
+  // nothing from. A view on a view is judged by the tables at the bottom and by every view
+  // on the way. A role is granted a view when it may read every table under it.
   const views = (await explicitDb.query(`
     select c.relname as name, c.relkind = 'm' as materialized,
       coalesce((select lower(option_value) in ('true', 'on', '1') from pg_options_to_table(c.reloptions) where option_name = 'security_invoker'), false) as invoker,
-      array(select distinct t.relname::text from pg_rewrite r join pg_depend d on d.objid = r.oid join pg_class t on t.oid = d.refobjid
-        where r.ev_class = c.oid and d.refobjid <> c.oid and t.relkind in ('r', 'p') order by 1) as tables
+      array(select distinct case when tn.nspname = 'public' then '' else tn.nspname || '.' end || t.relname || ':' || t.relkind::text
+        from pg_rewrite r join pg_depend d on d.objid = r.oid join pg_class t on t.oid = d.refobjid join pg_namespace tn on tn.oid = t.relnamespace
+        where r.ev_class = c.oid and d.refobjid <> c.oid and t.relkind in ('r', 'p', 'v', 'm')) as uses
     from pg_class c join pg_namespace n on n.oid = c.relnamespace
     where n.nspname = 'public' and c.relkind in ('v', 'm') order by c.relname`).catch(() => ({ rows: [] }))).rows;
+  const byName = new Map(views.map((v) => [v.name, v]));
+  // What a view reads in the end: tables in public, tables elsewhere (auth.users), and the
+  // views on the way that run as their owner (or keep their own copy).
+  const bottom = (v, seen = new Set()) => {
+    const out = { tables: new Set(), elsewhere: new Set(), owner: [] };
+    if (seen.has(v.name)) return out;
+    seen.add(v.name);
+    if (!v.invoker || v.materialized) out.owner.push(v);
+    for (const use of v.uses) {
+      const at = use.lastIndexOf(":");
+      const [rel, kind] = [use.slice(0, at), use.slice(at + 1)];
+      const table = kind === "r" || kind === "p";
+      if (rel.includes(".")) {
+        if (table) out.elsewhere.add(rel);
+      } else if (table) out.tables.add(rel);
+      else if (byName.has(rel)) {
+        const inner = bottom(byName.get(rel), seen);
+        for (const t of inner.tables) out.tables.add(t);
+        for (const t of inner.elsewhere) out.elsewhere.add(t);
+        out.owner.push(...inner.owner);
+      }
+    }
+    return out;
+  };
   for (const v of views) {
     const serverMissing = [];
     for (const cmd of COMMANDS) if (!(await hasTablePrivilege(explicitDb, "service_role", v.name, cmd))) serverMissing.push({ role: "service_role", cmd });
     if (serverMissing.length) out.server.push({ table: v.name, view: true, missing: serverMissing, grant: grantLines(v.name, serverMissing) });
-    if (!v.tables.length) continue;
+    const under = bottom(v);
+    const tables = [...under.tables];
+    if (!tables.length) continue;
     const missing = [];
     for (const role of ["anon", "authenticated"]) {
-      if (v.tables.every((t) => neededFor(t, policies).has(`${role} SELECT`)) && !(await hasTablePrivilege(explicitDb, role, v.name, "SELECT"))) missing.push({ role, cmd: "SELECT" });
+      if (tables.every((t) => neededFor(t, policies).has(`${role} SELECT`)) && !(await hasTablePrivilege(explicitDb, role, v.name, "SELECT"))) missing.push({ role, cmd: "SELECT" });
     }
     if (!missing.length) continue;
-    const problems = v.tables.flatMap((t) => findings.filter((f) => f.where === t && f.severity !== "review").map((f) => `${t}: ${f.title}`));
-    const exposed = v.invoker ? [] : missing.filter((m) => !v.tables.every((t) => readsAll(t, m.role, policies)));
-    if (exposed.length) {
-      const who = exposed.map((m) => (m.role === "anon" ? "visitors" : "signed-in users")).join(" and ");
-      problems.push(v.materialized
-        ? `a materialized view keeps its own copy of the rows, with no row-level security, so a grant would show ${who} every row of ${v.tables.join(", ")}`
-        : `it runs as its owner, so a grant would show ${who} every row of ${v.tables.join(", ")}; make it security_invoker first (alter view public.${quote(v.name)} set (security_invoker = true);)`);
+    const who = (list) => list.map((m) => (m.role === "anon" ? "visitors" : "signed-in users")).join(" and ");
+    const problems = tables.flatMap((t) => findings.filter((f) => f.where === t && f.severity !== "review").map((f) => `${t}: ${f.title}`));
+    if (under.elsewhere.size) {
+      // Following the caller's rules, it can't read those tables for them: a grant wouldn't help.
+      if (!under.owner.length) continue;
+      const shown = [...under.elsewhere].join(", ");
+      problems.push(`it shows ${shown}, which the API never shows anyone, so a grant would show ${who(missing)} what's in it${under.elsewhere.has("auth.users") ? " (users' emails, for auth.users)" : ""}; leave it out of the view, or serve it through a function that checks the caller`);
+    } else {
+      const exposed = under.owner.length ? missing.filter((m) => !tables.every((t) => readsAll(t, m.role, policies))) : [];
+      if (exposed.length) {
+        const culprit = under.owner[0];
+        const fix = `alter view public.${quote(culprit.name)} set (security_invoker = true);`;
+        problems.push(culprit.materialized
+          ? `${culprit === v ? "a materialized view" : `${culprit.name} is a materialized view: it`} keeps its own copy of the rows, with no row-level security, so a grant would show ${who(exposed)} every row of ${tables.join(", ")}`
+          : culprit === v
+            ? `it runs as its owner, so a grant would show ${who(exposed)} every row of ${tables.join(", ")}; make it security_invoker first (${fix})`
+            : `${culprit.name} runs as its owner, so a grant on this view would show ${who(exposed)} every row of ${tables.join(", ")}; make ${culprit.name} security_invoker first (${fix})`);
+      }
     }
     if (problems.length) out.unsafe.push({ table: v.name, view: true, missing, problems });
     else out.breaks.push({ table: v.name, view: true, missing, grant: grantLines(v.name, missing) });
