@@ -7,7 +7,7 @@ import { grantsReport } from "./grants.js";
 import { loadDatabase } from "./load.js";
 import { probeFunctions, probeStorage, probeTables, probeViews } from "./probe.js";
 import { ORDER, findingsFrom } from "./report.js";
-import { readBuckets, readFunctions, readGuards, readPolicies, readSchema } from "./schema.js";
+import { readBuckets, readFunctions, readGuards, readPolicies, readSchema, readTriggers } from "./schema.js";
 import { groupRoutes, ownerRoute, partyRoutes, seed } from "./seed.js";
 import { configBuckets, scanCode } from "./static.js";
 
@@ -39,6 +39,7 @@ export async function runProbe({ migrations, code = [], grants = "legacy", oct30
   const declared = configBuckets(code.find((f) => f.path === "supabase/config.toml")?.text);
   const storage = await probeStorage(load.db, declared).catch((error) => ({ rls: null, buckets: [], policies: [], error: error.message }));
   const functions = await readFunctions(load.db);
+  const triggers = await readTriggers(load.db);
   const guards = await readGuards(load.db).catch(() => new Set());
   // Calling functions is the newest probe: if it fails, the rest of the report stands.
   const calls = call ? await probeFunctions(load.db, functions, tables, known).catch(() => []) : [];
@@ -102,6 +103,9 @@ export async function runProbe({ migrations, code = [], grants = "legacy", oct30
     report.access = { comparison, problems: said.problems };
   }
   if (migrated) Object.defineProperty(report, "migrated", { value: migrated, enumerable: false });
+  // What each function does, so trying fixes can tell which tables a fix reaches through them.
+  Object.defineProperty(report, "functionBodies", { value: Object.fromEntries(functions.map((f) => [f.name, f.body ?? ""])), enumerable: false });
+  Object.defineProperty(report, "triggers", { value: triggers, enumerable: false });
   // Roughly what trying a set of fixes costs: everything after the migrations.
   Object.defineProperty(report, "trialTime", { value: performance.now() - seeded, enumerable: false });
   if (oct30) onProgress("grants");

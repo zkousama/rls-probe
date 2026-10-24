@@ -147,19 +147,22 @@ export async function verifyFixes({ migrations, report, snapshot, migrated = rep
 }
 
 // fixes: [{ kind, where, sql }], each meant to close the finding of that kind and place.
-export async function checkFixes({ migrations, report, snapshot, migrated = report.migrated, deadline = Infinity, trialTime = report.trialTime, fixes }) {
+export async function checkFixes({ migrations, report, snapshot, migrated = report.migrated, deadline = Infinity, trialTime = report.trialTime, fixes, onTrial }) {
   // A try that can't finish before the deadline isn't started: its time is guessed from
   // the probe that made the report (trialTime, in ms), then from the last try.
   let cost = trialTime ?? 0;
   const run = async (some) => {
     if (performance.now() + cost > deadline) return null;
     const started = performance.now();
+    onTrial?.(some.length);
     const result = await tryFixes({ migrations, report, snapshot, migrated, fixes: some });
     cost = performance.now() - started;
     return result;
   };
   const settled = new Set();
-  const kept = await keep(fixes, run, (fix) => entangled(fix, report), settled);
+  const reached = new Map();
+  const reach = (where) => reached.get(where) ?? reached.set(where, policyReach(where, report)).get(where);
+  const kept = await keep(fixes, run, { isEntangled: (fix) => entangled(fix, report), affects: (fix, where) => affects(fix, where, reach) }, settled);
   return fixes.map((fix) => ({ ...fix, verified: kept.includes(fix), ...(settled.has(fix) ? {} : { untested: "ran out of time" }) }));
 }
 
@@ -187,11 +190,40 @@ function entangled(fix, report) {
   }
 }
 
+// Whether a fix can change what happens on a table or bucket (as named in harm): it's a fix
+// to it, or to a table or function its policies name, directly or inside the functions they
+// call. reach(where): that text.
+function affects(fix, where, reach) {
+  if (fix.where === where || (fix.bucket && where === `storage bucket ${fix.bucket}`)) return true;
+  const name = fix.kind === "definer-function" ? fix.where.replace(/\(.*$/, "") : fix.bucket ? null : fix.where;
+  return Boolean(name) && new RegExp(`\\b${name.replace(/\W/g, "\\$&")}\\b`).test(reach(where));
+}
+
+// A table's (or bucket's) policies and triggers, and the bodies of the functions they call,
+// up to three calls deep.
+function policyReach(where, report) {
+  const policies = report.policies?.[where.startsWith("storage bucket ") ? "storage.objects" : where] ?? [];
+  let text = [...policies.map((p) => `${p.using ?? ""} ${p.check ?? ""}`), ...(report.triggers?.[where] ?? []).map((fn) => `${fn}()`)].join("\n");
+  const bodies = Object.entries(report.functionBodies ?? {});
+  const seen = new Set();
+  for (let depth = 0; depth < 3; depth++) {
+    const called = bodies.filter(([name]) => !seen.has(name) && new RegExp(`\\b${name.replace(/\W/g, "\\$&")}\\s*\\(`).test(text));
+    if (!called.length) break;
+    for (const [name, body] of called) {
+      seen.add(name);
+      text += `\n${body}`;
+    }
+  }
+  return text;
+}
+
 // The fixes that, applied together, close their problems and harm nothing. When the
-// set harms something, the entangled fixes are tried apart from the rest, and any part
-// that still harms is halved, until the fixes at fault are found. settled: the fixes
-// with a verdict, passed or failed, before the deadline.
-async function keep(fixes, run, isEntangled, settled) {
+// set harms something, a table only one fix can affect convicts that fix at once, the
+// fixes that can't affect any harmed table are tried apart from those that can, then the
+// entangled ones apart from the rest, and any part that still harms is halved, until the
+// fixes at fault are found. settled: the fixes with a verdict, passed or failed, before
+// the deadline.
+async function keep(fixes, run, how, settled) {
   if (!fixes.length) return [];
   const result = await run(fixes);
   if (!result) return [];
@@ -200,21 +232,35 @@ async function keep(fixes, run, isEntangled, settled) {
   for (const fix of fixes) if (!closing.includes(fix) || !result.harm.length || fixes.length === 1) settled.add(fix);
   if (!result.harm.length) return closing;
   if (fixes.length === 1) return [];
-  // First suspects: fixes to the tables or buckets where the harm showed. Then fixes
-  // other rules depend on. A few fixes are tried one by one; more are halved.
-  const suspects = closing.filter((f) => result.harm.some((h) => h.where === f.where));
-  const tangled = closing.filter(isEntangled);
-  const apart = (some) => some.length && some.length < closing.length ? [closing.filter((f) => !some.includes(f)), some] : null;
-  const half = Math.ceil(closing.length / 2);
-  const parts = apart(suspects) ?? apart(tangled) ?? (closing.length <= 3 ? closing.map((f) => [f]) : [closing.slice(0, half), closing.slice(half)]);
+  // Every fix in the try counts here, including those that didn't close their problem: they
+  // ran too. A harmed table only one fix can affect convicts that fix when it's a fix to that
+  // table itself; one that reaches it through policies, functions or triggers might not be
+  // the only way there, so it's tried apart instead (an innocent fix was convicted that way).
+  const own = (f, where) => f.where === where || (f.bucket && where === `storage bucket ${f.bucket}`);
+  const blamed = result.harm.map((h) => [h, fixes.filter((f) => how.affects(f, h.where))])
+    .filter(([h, t]) => t.length === 1 && own(t[0], h.where)).map(([, t]) => t[0]);
+  const convicted = new Set(blamed.filter((f) => closing.includes(f)));
+  for (const fix of convicted) settled.add(fix);
+  const left = closing.filter((f) => !convicted.has(f));
+  // Suspects: the fixes that can affect a harmed table. The others are tried together first,
+  // so most fixes get their verdict from one more try, and the suspects among themselves.
+  // Then fixes other rules depend on. A few fixes are tried one by one; more are halved.
+  const suspects = left.filter((f) => result.harm.some((h) => how.affects(f, h.where)));
+  const tangled = left.filter(how.isEntangled);
+  const apart = (some) => some.length && some.length < left.length ? [left.filter((f) => !some.includes(f)), some] : null;
+  const half = Math.ceil(left.length / 2);
+  const parts = apart(suspects) ?? (left.length < fixes.length ? [left] : null) ?? apart(tangled)
+    ?? (left.length <= 3 ? left.map((f) => [f]) : [left.slice(0, half), left.slice(half)]);
   const kept = [];
   for (const part of parts) {
-    const ok = await keep(part, run, isEntangled, settled);
+    const ok = await keep(part, run, how, settled);
     if (ok.length) kept.push(ok);
   }
   if (kept.length < 2) return kept[0] ?? [];
-  // Each part is harmless on its own; check they still are together.
+  // Each part is harmless on its own; check they still are together. Out of time for that,
+  // the parts after the first weren't tried with it, which isn't the same as failing.
   const both = await run(kept.flat());
+  if (!both) for (const fix of kept.slice(1).flat()) settled.delete(fix);
   return !both || both.harm.length ? kept[0] : kept.flat().filter(both.closes);
 }
 

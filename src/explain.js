@@ -252,6 +252,8 @@ function say(f, report) {
           ? `${capitalize(who)} can call the database function ${f.function}() to add rows to ${did.table} in other users' names: rls-probe tried it, and one was added for the test user. Fine if that's what it's for, like a public booking form.`
           : did
           ? `${capitalize(who)} can call the database function ${f.function}() to ${did.how === "deleted" ? "delete" : "change"} other users' ${did.table}: rls-probe tried it, and the test user's row in ${did.table} was ${did.how}.`
+          : f.secrets?.length
+            ? `${capitalize(who)} can call the database function ${f.function}() and get the secret${f.secrets.length > 1 ? "s" : ""} ${list(f.secrets.map((n) => `"${n}"`), "and")} from Supabase Vault: rls-probe tried it with a stand-in secret.`
           : f.leak
             ? `${capitalize(who)} can call the database function ${f.function}() and get other users' private data back: rls-probe tried it.`
             : f.counter

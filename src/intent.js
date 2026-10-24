@@ -200,6 +200,37 @@ function throughFunctions(use, functions, report) {
   }
 }
 
+// Whether a file runs with the service role: it names it (ADMIN), reads a setting the example
+// env files say holds the service role key under a name that doesn't say so (SUPABASE_KEY),
+// or gets its client from a module of the app that only uses such a key.
+const PUBLIC_KEY = /SUPABASE_(ANON|PUBLISHABLE)_KEY|supabase(Anon|Publishable)Key|anonKey|createBrowserClient/i;
+function serverCode(code, app) {
+  const settings = new Set();
+  for (const { path, text } of code) {
+    if (!/(^|\/)\.env[\w.-]*$/.test(path)) continue;
+    for (const m of text.matchAll(/^\s*(?:export\s+)?([A-Z][A-Z0-9_]*)\s*=(.*)$/gm)) {
+      if (/KEY|TOKEN|SECRET/.test(m[1]) && /service[_ -]?role|sb_secret_/i.test(m[2])) settings.add(m[1]);
+    }
+  }
+  const names = [...settings].map((n) => new RegExp(`\\b${n}\\b`));
+  const direct = (text) => ADMIN.test(text) || names.some((n) => n.test(text));
+  const modules = app.filter((f) => direct(f.text) && !PUBLIC_KEY.test(f.text)).map((f) => f.path.replace(/\.\w+$/, "").replace(/\/(index|__init__)$/, ""));
+  // Where an import points, as a path without its extension: "./client", "@/lib/db", "src.infra.client".
+  const imported = (path, text) => [
+    ...[...text.matchAll(/\bfrom\s+['"]([^'"]+)['"]|\brequire\(\s*['"]([^'"]+)['"]\s*\)/g)].map((m) => m[1] ?? m[2]),
+    ...[...text.matchAll(/^\s*from\s+(\.*[\w.]+)\s+import\b/gm)].map((m) => m[1].replace(/^(\.+)/, (dots) => (dots.length === 1 ? "./" : "../".repeat(dots.length - 1))).replace(/(?<=\w)\./g, "/")),
+  ].map((spec) => {
+    if (spec.startsWith(".")) {
+      const parts = path.split("/").slice(0, -1);
+      for (const p of spec.split("/")) p === ".." ? parts.pop() : p !== "." && parts.push(p);
+      return parts.join("/");
+    }
+    return spec.replace(/^[@~]\//, "");
+  });
+  // A one-word name ("supabase") is a package unless it's a file at the root.
+  return (path, text) => direct(text) || imported(path, text).some((spec) => modules.some((m) => m === spec || (spec.includes("/") && m.endsWith(`/${spec}`))));
+}
+
 function usage(code) {
   const tables = new Map();
   const storage = new Map();
@@ -220,9 +251,10 @@ function usage(code) {
     return null;
   };
   const word = (name) => name.replace(/\W/g, "\\$&");
+  const isAdmin = serverCode(code, app);
   for (const { path, text } of app) {
     if (!/\.(from|rpc|table)\(/.test(text)) continue;
-    const admin = ADMIN.test(text);
+    const admin = isAdmin(path, text);
     const signedIn = SIGNED_IN.test(text);
     const lineOf = (i) => text.slice(0, i).split("\n").length;
     // supabase-js .from("t") and supabase-py .table("t"), and the calls chained after.
@@ -253,7 +285,7 @@ function usage(code) {
     named: (name) => {
       const quoted = new RegExp(`['"\`]${word(name)}['"\`]`);
       for (const { path, text } of app) {
-        if (ADMIN.test(text) || /(^|\/)supabase\/functions\//.test(path) || path.endsWith(".py")) continue;
+        if (isAdmin(path, text) || /(^|\/)supabase\/functions\//.test(path) || path.endsWith(".py")) continue;
         const m = quoted.exec(text.replace(/\.(from|table|rpc)\(\s*['"`][\w.-]+['"`]/g, ""));
         if (m) return { path, line: lineIn(text, m.index) };
       }

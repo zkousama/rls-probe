@@ -230,10 +230,18 @@ export async function probeFunctions(db, functions, tables, known) {
       continue;
     }
     const calls = {};
+    // Secrets it reads from Supabase Vault by name get a stand-in value for the call, so
+    // handing one out shows in what comes back. A project's URL or host isn't a secret.
+    const secrets = /\bvault\./i.test(f.body)
+      ? [...new Set([...f.body.matchAll(/\bname\s*=\s*'([^']+)'/gi)].map((m) => m[1]))].filter((n) => !/url|host|endpoint|domain|region|project_?ref/i.test(n))
+      : [];
+    const stand = Object.fromEntries(secrets.map((n) => [n, `rls-probe-secret-${n}-${Math.random().toString(36).slice(2, 10)}`]));
+    const plant = secrets.map((n) => `delete from vault.secrets where name = ${literal(n)}; insert into vault.secrets (name, secret) values (${literal(n)}, ${literal(stand[n])});`).join("\n");
     for (const who of ["anon", "B"]) {
       if (who === "anon" ? !f.anon : !f.authenticated) continue;
       const { role, claims } = AS[who];
       await db.exec(`begin;
+        ${plant}
         select set_config('request.jwt.claims', ${literal(JSON.stringify(claims))}, true),
           set_config('request.jwt.claim.sub', ${literal(claims.sub ?? "")}, true),
           set_config('request.jwt.claim.role', ${literal(claims.role)}, true);
@@ -251,7 +259,8 @@ export async function probeFunctions(db, functions, tables, known) {
         }
         const text = JSON.stringify(call.rows);
         const returned = call.rows.some((r) => aJson.has(JSON.stringify(r))) || [...tells].some((t) => text.includes(t));
-        calls[who] = { ok: call.ok, ...(call.ok ? {} : { error: call.error }), changed, returned };
+        const handed = secrets.filter((n) => text.includes(stand[n]));
+        calls[who] = { ok: call.ok, ...(call.ok ? {} : { error: call.error }), changed, returned, ...(handed.length ? { secrets: handed } : {}) };
       } finally {
         await db.exec("rollback");
       }

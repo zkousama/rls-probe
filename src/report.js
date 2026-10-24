@@ -4,7 +4,7 @@ import { CHECKS_CALLER } from "./schema.js";
 export const SENSITIVE = /(email|phone|address|latitude|longitude|zip_code|postal|password|token|secret|iban|ssn|birth|salary|stripe|customer_id|api_key)/i;
 export const ORDER = { critical: 0, high: 1, medium: 2, review: 3 };
 // Errors that mean "you may not": a function turning a caller away.
-const REFUSED = /\b(permission|not authori[sz]ed|unauthori[sz]ed|denied|forbidden|not allowed|only|must be signed|sign in|log ?in|insufficient)\b/i;
+const REFUSED = /\b(permission|not authori[sz]ed|unauthori[sz]ed|denied|forbidden|not allowed|only|must be signed|sign in|log ?in|insufficient|authentication required|not authenticated|unauthenticated)\b/i;
 // A function that fails because something it uses is missing is broken, not guarded, whatever
 // the missing column is called (last_login).
 const BROKEN = /does not exist/i;
@@ -77,10 +77,12 @@ export function findingsFrom(results, views, functions, buckets, storage, guards
     const harm = (who) => (f.calls?.[who]?.changed ?? []).filter((c) => !(c.how === "changed" && c.columns.length && c.columns.every((col) => TALLY.test(col))) && !(c.how === "added" && LOG.test(c.table)));
     const by = harm("anon").length ? "anon" : harm("B").length ? "B" : null;
     const leak = f.calls?.anon?.returned ? "anon" : f.calls?.B?.returned ? "B" : null;
-    if (!by && !leak && checks && !f.anon) continue;
+    // A secret from Supabase Vault in what it returned.
+    const secret = f.calls?.anon?.secrets ? "anon" : f.calls?.B?.secrets ? "B" : null;
+    if (!by && !leak && !secret && checks && !f.anon) continue;
     // Called, and all it did was move a counter.
     const counted = !by && !leak ? ["anon", "B"].find((w) => f.calls?.[w]?.changed.length) : null;
-    const who = by ?? leak ?? counted ?? (f.anon ? "anon" : "B");
+    const who = by ?? secret ?? leak ?? counted ?? (f.anon ? "anon" : "B");
     const proof = by ? { changed: harm(by), called: f.called } : null;
     // Deleting or changing another user's data is worse than adding rows in their name,
     // which a booking form, say, does on purpose.
@@ -92,12 +94,15 @@ export function findingsFrom(results, views, functions, buckets, storage, guards
     const calls = Object.values(f.calls ?? {});
     const refusal = calls.length && calls.every((c) => !c.ok && REFUSED.test(c.error ?? "") && !BROKEN.test(c.error ?? "")) ? calls[0].error : null;
     // It turned every caller away and nothing suggests otherwise: not worth anyone's time.
-    if (refusal && !leak) continue;
+    if (refusal && !leak && !secret) continue;
     const caller = who === "anon" ? "visitors who aren't signed in" : "any signed-in user";
     findings.push({ kind: "definer-function", function: f.name, callers: who === "anon" ? "anyone" : "users", writes, proof, leak: Boolean(leak), tried, checks,
+      ...(secret ? { secrets: f.calls[secret].secrets } : {}),
       counter: counted ? { table: f.calls[counted].changed[0].table, columns: f.calls[counted].changed.flatMap((c) => c.columns) } : null,
-      refusal, severity: by ? (destroys ? (by === "anon" ? "critical" : "high") : by === "anon" ? "high" : "medium") : leak ? "high" : counted || refusal || checks || !writes ? "review" : "high", where: `${f.name}(${f.args})`, title: "Function runs with full rights and anyone can call it",
-      detail: proof
+      refusal, severity: by ? (destroys ? (by === "anon" ? "critical" : "high") : by === "anon" ? "high" : "medium") : secret ? (secret === "anon" ? "critical" : "high") : leak ? "high" : counted || refusal || checks || !writes ? "review" : "high", where: `${f.name}(${f.args})`, title: "Function runs with full rights and anyone can call it",
+      detail: secret
+        ? `It's security definer, so it skips row-level security. Called by ${secret === "anon" ? "a visitor" : "a signed-in user"}, it returned the secret ${f.calls[secret].secrets.map((n) => `"${n}"`).join(" and ")} from Supabase Vault.`
+        : proof
         ? `It's security definer, so it skips row-level security. Called by ${who === "anon" ? "a visitor" : "another signed-in user"}${aimed}, it ${proof.changed.map((c) => `${c.how} user A's row in ${c.table}${c.how === "changed" && c.columns.length ? ` (${c.columns.join(", ")})` : ""}`).join(", and ")}.`
         : leak
           ? `It's security definer, so it skips row-level security. Called by ${who === "anon" ? "a visitor" : "another signed-in user"}${aimed}, it returned user A's private data.`

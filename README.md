@@ -103,6 +103,12 @@ by a comment. Only an explicit "on purpose" lowers a finding to "worth a look", 
 app treating rows as each user's own raises a read to high. With a pasted schema and no
 code, only the migrations' own words count.
 
+Server code is recognised by the service role key, including under a name that doesn't
+say so (`SUPABASE_KEY`) when an example env file says what it holds, and by importing its
+client from a module that only uses that key. A database function the app calls, unless
+it's `security definer`, reads and writes its tables as the caller, so those tables count
+as used by the app.
+
 ### Say what each table is for
 
 Where the code can't settle it, you can. Write down who may see, add and change each
@@ -274,6 +280,8 @@ and still let one user edit another's rows. So this doesn't read them. It tries.
   called as a visitor and as the second user, with arguments aimed at the first
   user's rows (their id, the id of their order), and what it did is compared:
   "rls-probe tried it, and the test user's row in orders was deleted". A function
+  that reads a secret from Supabase Vault by name gets a stand-in secret under that
+  name for the call, so one that hands it out is caught the same way. A function
   that only bumps a counter, or that checks `auth.uid()` and changes nothing, is
   marked as worth a look rather than as a problem.
 - **Teammates**, when the app has groups (organization, team or workspace members):
@@ -427,10 +435,10 @@ checked.
 
 On 25 open-source apps built with Lovable, Bolt or by hand (7 to 671 migration
 files each), every run finishes, most in 2 to 4 seconds. Testing the fixes as well
-(`--test-fixes`, `--prompt`, `--fix-policies`) takes 2 to 38 seconds, 5 for the median
-app, and stops after three minutes on the largest (402 tables), leaving the fixes it
-didn't get to marked untested. Of the 348 fixes proposed for the other 24 apps, 346
-passed (0.10.1).
+(`--test-fixes`, `--prompt`, `--fix-policies`) takes 2 to 19 seconds, 4 for the median
+app. On the largest (402 tables) it stops after three minutes, by which time 364 of its
+376 fixes are verified and the rest are marked untested. Of the 348 fixes proposed for
+the other 24 apps, 346 passed (0.10.1).
 
 ## Limits
 
@@ -467,4 +475,13 @@ passed (0.10.1).
 
 ```sh
 npm test
+```
+
+Before a release, `scripts/corpus-check.mjs` runs rls-probe on a folder of real apps
+and compares the results with the last good run: it fails when an app stops running or
+a fix that was verified isn't any more, and lists every finding and verdict that
+changed, to be explained:
+
+```sh
+node scripts/corpus-check.mjs ~/apps results-new --against results-last
 ```

@@ -68,7 +68,10 @@ const appRoot = fs.statSync(target).isFile() ? path.dirname(target) : target;
 const configFile = path.join(appRoot, CONFIG);
 const config = fs.existsSync(configFile) ? fs.readFileSync(configFile, "utf8") : null;
 const probed = await runProbe({ migrations, code: readCodeFiles(target), grants, oct30, snapshot, explicitGrants, keep: testFixes, config });
+// target first; the probe's hidden parts (the saved database, function bodies, triggers) come
+// along, since trying fixes needs them and a spread leaves them out.
 const report = { target, ...probed };
+for (const [key, d] of Object.entries(Object.getOwnPropertyDescriptors(probed))) if (!d.enumerable) Object.defineProperty(report, key, d);
 if (testFixes) report.fixes = await verifyFixes({ migrations, report, snapshot, migrated: probed.migrated, trialTime: probed.trialTime, deadline: performance.now() + fixTime * 1000 });
 // Supabase keys migrations by their timestamp, so two written in one run are a second apart.
 const now = Date.now();

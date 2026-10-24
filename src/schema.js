@@ -81,6 +81,18 @@ export async function readSchema(db) {
   return result;
 }
 
+// The functions each table's triggers run, by table: { orders: ["stamp_currency"] }.
+export async function readTriggers(db) {
+  const rows = (await db.query(`
+    select c.relname as table, p.proname as function
+    from pg_trigger t join pg_class c on c.oid = t.tgrelid join pg_namespace n on n.oid = c.relnamespace
+      join pg_proc p on p.oid = t.tgfoid
+    where not t.tgisinternal and n.nspname = 'public'`).catch(() => ({ rows: [] }))).rows;
+  const out = {};
+  for (const r of rows) (out[r.table] ??= []).push(r.function);
+  return out;
+}
+
 export async function readFunctions(db) {
   return (await db.query(`
     select p.proname as name, pg_get_function_identity_arguments(p.oid) as args, p.prosecdef as definer,

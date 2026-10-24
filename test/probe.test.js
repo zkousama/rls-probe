@@ -514,6 +514,61 @@ create policy "anyone reads avatars" on storage.objects for select using (bucket
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+// When each harmful fix is the only one touching the table where the harm shows, it's found
+// from that one try, not by halving the set again and again (which ran out of time on an app
+// with 400 tables).
+test("fixes that each harm only their own table are found without trying them one by one", async () => {
+  const { runProbe } = await import("../src/engine.js");
+  const { checkFixes } = await import("../src/fixes.js");
+  const { baseSnapshot } = await import("../src/snapshot.js");
+  const snapshot = await baseSnapshot();
+  const owned = (t) => `create table public.${t} (id uuid primary key default gen_random_uuid(), user_id uuid not null references auth.users (id), body text);
+alter table public.${t} enable row level security;
+create policy "own ${t}" on public.${t} for all to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());`;
+  const open = (t) => `${owned(t)}\ncreate policy "anyone reads ${t}" on public.${t} for select to anon using (true);`;
+  const bad = ["b1", "b2", "b3", "b4", "b5"];
+  const good = ["g1", "g2", "g3"];
+  const migrations = [{ name: "20250101000000_app.sql", sql: [...bad.map(owned), ...good.map(open)].join("\n") }];
+  const report = await runProbe({ migrations, snapshot, keep: true });
+  let trials = 0;
+  const checked = await checkFixes({ migrations, report, snapshot, onTrial: () => trials++, fixes: [
+    ...bad.map((t) => ({ kind: "user-read", where: t, sql: `create policy "nobody reads ${t}" on public.${t} as restrictive for select to authenticated using (false);` })),
+    ...good.map((t) => ({ kind: "visitor-read", where: t, sql: `revoke select on public.${t} from anon;` })),
+  ] });
+  assert.deepEqual(Object.fromEntries(checked.map((f) => [f.where, f.verified])), { b1: false, b2: false, b3: false, b4: false, b5: false, g1: true, g2: true, g3: true });
+  assert.ok(trials <= 2, `${trials} tries`);
+});
+
+// Revoking a function a trigger calls takes away the owner's own updates; the trigger points
+// at it, so it's tried apart at once, not after halving the rest.
+test("harm through a trigger is pinned on the fix that caused it", async () => {
+  const { runProbe } = await import("../src/engine.js");
+  const { checkFixes } = await import("../src/fixes.js");
+  const { baseSnapshot } = await import("../src/snapshot.js");
+  const snapshot = await baseSnapshot();
+  const open = (t) => `create table public.${t} (id uuid primary key default gen_random_uuid(), user_id uuid not null references auth.users (id), body text);
+alter table public.${t} enable row level security;
+create policy "own ${t}" on public.${t} for all to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
+create policy "anyone reads ${t}" on public.${t} for select to anon using (true);`;
+  const migrations = [{ name: "20250101000000_app.sql", sql: `${["orders", "g1", "g2"].map(open).join("\n")}
+create function public.approved(p uuid) returns boolean language sql security definer as $$ select true $$;
+create function public.guard_orders() returns trigger language plpgsql as $$
+begin
+  if not approved(new.id) then raise exception 'needs approval'; end if;
+  return new;
+end $$;
+create trigger guard before update on public.orders for each row execute function public.guard_orders();
+` }];
+  const report = await runProbe({ migrations, snapshot, keep: true });
+  let trials = 0;
+  const checked = await checkFixes({ migrations, report, snapshot, onTrial: () => trials++, fixes: [
+    { kind: "definer-function", where: "approved(p uuid)", sql: "revoke execute on function public.approved(p uuid) from public, anon, authenticated;" },
+    ...["g1", "g2"].map((t) => ({ kind: "visitor-read", where: t, sql: `revoke select on public.${t} from anon;` })),
+  ] });
+  assert.deepEqual(checked.map((f) => f.verified), [false, true, true]);
+  assert.ok(trials <= 3, `${trials} tries`);
+});
+
 // Trying fixes doesn't call functions again, so a function that refused every call in the
 // inspection (and so isn't a finding) mustn't count as a new problem in each try. An error
 // about a column called last_login isn't a refusal, though: that function is just broken.
@@ -545,6 +600,46 @@ end $$;
   assert.ok(fixes.some((f) => f.where === "notes"));
   assert.deepEqual(fixes.filter((f) => !f.verified).map((f) => `${f.kind}:${f.where}`), []);
   assert.ok(fixes.some((f) => f.kind === "definer-function" && f.verified), "record_login's revoke passes too");
+});
+
+// A function that hands out a secret from Supabase Vault is caught by calling it: rls-probe
+// puts a stand-in secret under each name the function reads, and looks for it in what comes
+// back. One that turns callers away, and one that returns only the project's URL, aren't.
+test("functions that hand out Vault secrets are caught by calling them", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rls-probe-vault-"));
+  fs.mkdirSync(path.join(dir, "supabase", "migrations"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "supabase", "migrations", "20250101000000_app.sql"), `
+create table public.notes (id uuid primary key default gen_random_uuid(), user_id uuid not null references auth.users (id), body text);
+alter table public.notes enable row level security;
+create policy "own notes" on public.notes for all to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
+create function public.webhook_secret() returns text language plpgsql security definer as $$
+declare v text;
+begin
+  select decrypted_secret into v from vault.decrypted_secrets where name = 'webhook_secret';
+  return v;
+end $$;
+create function public.read_secret(p_id uuid) returns text language plpgsql security definer as $$
+begin
+  if auth.role() is distinct from 'service_role' then raise exception 'authentication required'; end if;
+  return (select decrypted_secret from vault.decrypted_secrets where id = p_id);
+end $$;
+create function public.project_url() returns text language plpgsql security definer as $$
+declare v text;
+begin
+  select decrypted_secret into v from vault.decrypted_secrets where name = 'supabase_url';
+  return v;
+end $$;
+`);
+  const { report } = run(dir);
+  const fn = (name) => report.findings.find((f) => f.kind === "definer-function" && f.function === name);
+  const leak = fn("webhook_secret");
+  assert.equal(leak.severity, "critical");
+  assert.deepEqual(leak.secrets, ["webhook_secret"]);
+  assert.match(explain(report).problems.find((i) => i.id === "definer-function:webhook_secret()").headline,
+    /anyone on the internet can call the database function webhook_secret\(\) and get the secret "webhook_secret" from Supabase Vault/i);
+  assert.equal(fn("read_secret"), undefined, "it turns every caller away");
+  assert.equal(fn("project_url")?.severity ?? "review", "review", "the project's URL isn't a secret");
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 // What a key looks like isn't a key: another service's sk- key, a placeholder, code that
@@ -633,6 +728,25 @@ export async function load() {
   assert.match(scores.intent.reasons[0], /through top_scores\(\) \(src\/pages\/Scores\.tsx:3\), which runs as the caller/);
   const ledger = report.findings.find((f) => f.kind === "rls-off" && f.where === "ledger");
   assert.equal(ledger.intent.verdict, "mistake", "ledger_total() runs as its owner, so callers never needed the table");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// A setting with a name that doesn't say which key it holds (SUPABASE_KEY) is the service role
+// when the example env file says so, and so is code that gets its client from such a module.
+test("a key setting the example env file calls the service role key counts as one", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rls-probe-envkey-"));
+  fs.cpSync(fileURLToPath(new URL("./fixtures/intent", import.meta.url)), dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "supabase/migrations/20250104000000_audit.sql"), "create table public.audit_entries (id bigint generated always as identity primary key, action text not null);\n");
+  fs.mkdirSync(path.join(dir, "backend/src/infra"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "backend/.env.example"), 'SUPABASE_URL="http://localhost:54321"\nSUPABASE_KEY="<supabase-service-role-key>"\n');
+  fs.writeFileSync(path.join(dir, "backend/src/infra/client.py"), 'import os\nfrom supabase import create_client\n\nclient = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])\n');
+  fs.writeFileSync(path.join(dir, "backend/src/audit.py"), 'from src.infra.client import client\n\n\ndef recent():\n    return client.table("audit_entries").select("action").execute()\n');
+  const { report } = run(dir);
+  const audit = report.findings.find((f) => f.kind === "rls-off" && f.where === "audit_entries");
+  assert.equal(audit.intent.verdict, "mistake");
+  assert.match(audit.intent.reasons[0], /only with the service role \(backend\/src\/audit\.py:5\)/);
+  const posts = report.findings.find((f) => f.where === "posts" && f.intent);
+  assert.equal(posts.intent.verdict, "unclear", "the front end's public key is still the public key");
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
